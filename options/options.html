@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>智能简历填充 - 选项</title>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; padding: 20px; width: 400px; }
+    label { display: block; margin-bottom: 5px; }
+    input[type="password"], input[type="text"] { width: 95%; padding: 8px; margin-bottom: 10px; }
+    button { padding: 10px 15px; }
+    #status { margin-top: 15px; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>智能简历填充 - 选项</h2>
+
+  <form id="optionsForm">
+    <label for="apiKey">OpenAI API Key:</label>
+    <input type="password" id="apiKey" name="apiKey" required>
+    <button type="submit">保存密钥</button>
+     <button type="button" id="showKeyButton">显示/隐藏</button>
+  </form>
+
+  <div id="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html> 

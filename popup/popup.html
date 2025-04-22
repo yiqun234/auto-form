@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>简历填充面板</title>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; width: 300px; padding: 10px; }
+    #status { margin-top: 10px; font-style: italic; }
+    button { margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <h3>智能简历填充</h3>
+  <label for="resumeFile">上传简历1 (TXT/PDF/DOCX):</label>
+  <input type="file" id="resumeFile" accept=".txt,.pdf,.docx">
+  <br>
+  <button id="fillFormButton">填充当前页面表单</button>
+  <div id="status">请先上传简历</div>
+
+  <script src="popup.js"></script>
+</body>
+</html> 

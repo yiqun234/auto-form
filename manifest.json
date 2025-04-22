@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "智能简历填充助手 (Auto Form Filler)",
+  "version": "0.1.0",
+  "description": "上传简历，使用 OpenAI 智能解析并自动填充网页表单。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://api.openai.com/*"
+  ],
+  "action": {
+    "default_icon": {}
+  },
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options/options.html"
+} 
