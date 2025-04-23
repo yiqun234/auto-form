@@ -306,12 +306,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         Rules:
         1. Analyze the 'label', 'name', 'id', 'placeholder', and 'type' of each form field to understand its purpose.
         2. Find the most relevant piece of information from the 'resumeData' for each field.
-        3. Format your response as a JSON object where keys are the 'fieldId' from the input 'formFields' list, and values are the strings to be filled into those fields.
+        3. Format your response as a JSON object where keys are the 'fieldId' from the input 'formFields' list, and values are the strings to be filled into those fields. **All values MUST be strings.**
         4. If no suitable information is found in the resume for a specific field, OMIT that field's key from your response JSON. Do not include keys with null or empty values.
         5. For complex fields (like work experience or education), try to provide a concise summary or the most relevant part if the field is a simple text input. If the form has dedicated sections/multiple fields for these, adapt accordingly (though this prompt assumes single fields for simplicity first).
-        6. Pay attention to field types (e.g., 'email', 'tel', 'number', 'date'). Format the output accordingly if possible, but prioritize providing the correct text information.
-        7. For some questions that are not included in your resume, you need to combine your resume and your own thinking to complete the answers
-        8. Please return the answer if the type in the JSON object is 'text' or 'textarea'. It cannot be empty. You can make up your own answer.
+        6. **(Enhanced)** Pay attention to field types (e.g., 'email', 'tel', 'number', 'date'). Format the output accordingly. **Specifically, if a field asks for a numerical quantity like years of experience, age, or count (check labels/names/placeholders for keywords like 'years', '年', 'experience', '经验', 'duration', 'age', 'number', 'count'), and the field type appears to be 'number' or expects a numerical input, return ONLY the numerical value as a string (e.g., return "7", not "7 years").**
+        7. For some questions that are not included in your resume, you need to combine your resume and your own thinking to complete the answers.
+        8. Please return the answer if the type in the JSON object is 'text' or 'textarea'. It cannot be empty. You can make up your own answer. **Ensure all returned values, including numbers, are formatted as strings.**
 
         Resume Data:
         \`\`\`json
@@ -323,10 +323,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         ${JSON.stringify(formFields, null, 2)}
         \`\`\`
 
-        Required Output Format (JSON object mapping fieldId to value):
+        Required Output Format (JSON object mapping fieldId to value, values MUST be strings):
         {
           "fieldId_1": "Value from resume",
-          "fieldId_3": "Another value"
+          "fieldId_3": "7" 
           // Only include fields for which a match was found
         }
 
