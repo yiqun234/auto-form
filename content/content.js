@@ -121,8 +121,8 @@ function createAndInjectSidebar() {
       <h3>选择简历文件</h3>
       <p style="font-size: 14px; margin-top: 0;">上传简历并使用 AI 自动填充表单</p>
       <label class="file-input-label">
-        选择文件 (TXT/PDF/DOCX)
-        <input type="file" id="resume-file" accept=".txt,.pdf,.docx">
+        选择文件 (PDF)
+        <input type="file" id="resume-file" accept=".pdf">
       </label>
       <div id="status-message">请先上传简历</div>
     </div>
