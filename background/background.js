@@ -115,50 +115,29 @@ async function processResumeFileWithId(fileData, fileName, apiKey) {
     // === 2. 调用 Chat Completions API (使用用户建议的格式) ===
     console.log(`Analyzing uploaded resume file (ID: ${fileId}) with OpenAI using specific format...`);
     const API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-    const API_MODEL = "gpt-4o";
+    const API_MODEL = "gpt-4.1";
 
     // 新的提示词，同时包含简历解析和表单匹配功能
-    const analysisPromptText = `您是一个 AI 助手，在分析简历并填写网页表单方面经验丰富。请完成两个任务：
+    const analysisPromptText = `您是一个专业的简历分析AI助手。请分析附加的简历文件 (ID: ${fileId})，并将其内容转换为合适的JSON格式,注意json的内容应该与简历保持一致，不需要去翻译。
 
-    第一任务：分析附加的简历文件 (ID: ${fileId})，并提取结构化信息。
+    分析要求：
+    1. 请根据简历中实际包含的信息内容，自行判断并构建最适合的JSON结构
+    2. 提取所有有价值的信息，包括但不限于：个人信息、联系方式、工作经历、教育背景、技能、项目经验、认证资格等
+    3. 对于复杂的经历描述，请提取关键信息并保持原有语义
+    4. 保持JSON结构的可读性和合理性，根据简历内容灵活设计JSON字段和层次
+    5. 如果简历包含特定行业或职位的专业信息，请适当设计专门的字段存储这些内容
+    6. 内容的语言应该与简历的语言保持一致，不需要去翻译简历中的内容
     
-    提取以下字段（如果信息存在）：
-    - name (string): 姓名
-    - email (string): 电子邮箱
-    - phone (string): 电话号码
-    - location (string): 所在地
-    - summary (string): 个人简介或概述
-    - skills (array of strings): 技能列表
-    - experience (array of objects): 工作经验，每项包含 title, company, dates, description
-    - education (array of objects): 教育经历，每项包含 degree, institution, dates
-    - links (array of strings): 相关链接，如 LinkedIn, GitHub 等
+    同时，您也需要具备将提取的信息匹配到网页表单字段的能力：
+    1. 能够分析表单字段的属性（如label、name、id等）来理解字段用途
+    2. 能从您提取的JSON数据中找到最相关的信息来填充表单
+    3. 需要根据表单字段类型适当格式化信息（如日期、电话、邮箱等）
     
-    第二任务：根据提取的简历信息，你还需要能够匹配网页表单字段。
+    请确保您的响应包含两个主要部分：
+    1. "resumeData": 包含您从简历中提取并自行构建的完整JSON数据
+    2. "fieldMappingFunction": 描述如何将resumeData中的数据映射到表单字段的逻辑
     
-    表单匹配规则：
-    1. 分析表单字段的 'label', 'name', 'id', 'placeholder', 和 'type' 来理解其用途
-    2. 从简历数据中找到最相关的信息填入每个字段
-    3. 对于复杂字段（如工作经验或教育背景），如果字段是简单文本输入，则提供简洁摘要
-    4. 注意字段类型（如 'email', 'tel', 'number', 'date'），尽可能格式化输出
-    5. 如果在简历中找不到特定字段的合适信息，则在输出中省略该字段
-
-    请确保您的响应是严格有效的 JSON 格式，包含两个主要部分：
-    1. "resumeData": 包含从简历中提取的所有结构化信息
-    2. "fieldMappingFunction": 一个可以接受表单字段列表并返回映射的函数描述
-    
-    响应示例格式：
-    \`\`\`json
-    {
-      "resumeData": {
-        "name": "张三",
-        "email": "zhangsan@example.com",
-        // 其他提取的简历数据...
-      },
-      "fieldMappingFunction": "此部分描述如何根据提供的表单字段和上面的resumeData进行匹配的函数逻辑"
-    }
-    \`\`\`
-    
-    请将您的 JSON 响应放在 \`\`\`json 和 \`\`\` 标记之间。`;
+    请将您的JSON响应放在\`\`\`json和\`\`\`标记之间，确保格式有效。`;
 
     const messages = [
       {
@@ -331,6 +310,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         4. If no suitable information is found in the resume for a specific field, OMIT that field's key from your response JSON. Do not include keys with null or empty values.
         5. For complex fields (like work experience or education), try to provide a concise summary or the most relevant part if the field is a simple text input. If the form has dedicated sections/multiple fields for these, adapt accordingly (though this prompt assumes single fields for simplicity first).
         6. Pay attention to field types (e.g., 'email', 'tel', 'number', 'date'). Format the output accordingly if possible, but prioritize providing the correct text information.
+        7. For some questions that are not included in your resume, you need to combine your resume and your own thinking to complete the answers
+        8. Please return the answer if the type in the JSON object is 'text' or 'textarea'. It cannot be empty. You can make up your own answer.
 
         Resume Data:
         \`\`\`json
