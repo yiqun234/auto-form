@@ -299,24 +299,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         const apiKey = await getApiKey();
         const prompt = `
-        You are an AI assistant helping to fill a web form based on a parsed resume.
-        Below is the structured resume data (in JSON format) and a list of form fields identified on a webpage.
-        Your task is to determine the best value from the resume data to fill into each form field.
+        您是一个AI助手，负责根据提供的结构化简历数据和网页表单字段列表，生成自动填充表单所需的键值对。您的目标是理解每个表单字段的问题，并根据简历数据提供最准确、最相关的回答。您的响应应该是一个JSON对象，其中键是表单字段的 'fieldId' (来自 input formFields)，值是应该填充到该字段的字符串。
 
-        Rules:
-        1. Analyze the 'label', 'name', 'id', 'placeholder', and 'type' of each form field to understand its purpose.
-        2. Find the most relevant piece of information from the 'resumeData' for each field.
-        3. Format your response as a JSON object where keys are the 'fieldId' from the input 'formFields' list, and values are the strings to be filled into those fields. **All values MUST be strings.**
-        4. If no suitable information is found in the resume for a specific field, OMIT that field's key from your response JSON. Do not include keys with null or empty values.
-        5. For complex fields (like work experience or education), try to provide a concise summary or the most relevant part if the field is a simple text input. If the form has dedicated sections/multiple fields for these, adapt accordingly (though this prompt assumes single fields for simplicity first).
-        6. **(Enhanced)** Pay attention to field types (e.g., 'email', 'tel', 'number', 'date'). Format the output accordingly. **Specifically, if a field asks for a numerical quantity like years of experience, age, or count (check labels/names/placeholders for keywords like 'years', '年', 'experience', '经验', 'duration', 'age', 'number', 'count'), and the field type appears to be 'number' or expects a numerical input, return ONLY the numerical value as a string (e.g., return "7", not "7 years").**
-        7. For some questions that are not included in your resume, you need to combine your resume and your own thinking to complete the answers.
-        8. Please return the answer if the type in the JSON object is 'text' or 'textarea'. It cannot be empty. You can make up your own answer. **Ensure all returned values, including numbers, are formatted as strings.**
+        重要规则：
+        1. 分析每个表单字段的 'label', 'name', 'id', 'placeholder', 'type', 以及 **最重要的 'options' 列表** 来理解其用途和期望的输入格式。
+        2. **从简历数据中寻找或推断答案:** 这是核心任务。对于每个字段，首先在 'resumeData' (这是一个结构化JSON对象，包含 personalInfo, workExperience, education, skills, projects 等信息) 中找到最相关的信息。您需要阅读简历数据中的文本描述，理解其含义，并据此生成答案。
+        3. **处理选择项 (下拉菜单, 单选, 复选):** 如果表单字段有 'options' 数组，请找到简历数据或根据以下规则推断出的最匹配内容。然后从 'options' 列表中找到与该内容最接近的选项，返回该选项的 **'value' 属性**。如果该选项没有 'value' 属性，则返回其 **'text' 属性**。
+        4. **处理特定问题 (正面回答):** 对于少数与简历内容不直接相关，但需要标准积极回答的问题（例如：接受背景调查/毒品检查？意愿搬迁/出差？是否残疾？），根据提供的 'options' 列表，选择一个表达积极意愿或标准态度的选项的 **'value' 或 'text'** 返回。**注意：此规则仅适用于特定类型的通用问题，不适用于询问具体技能或经验年限的问题。**
+        5. **处理数值问题 (如工作年限):** 如果表单字段（通过label/name/placeholder识别，如“SCADA 经验年限？”）询问一个数量（如年限、人数等），请在 'resumeData' (特别是工作经历 \`workExperience\` 和项目 \`projects\`) 中找到相关的经验描述。**根据描述中的时间和内容，估算**相关的年限或数量。返回的答案必须是**纯数字的字符串**（例如，如果简历表明有 3 年相关经验，返回 "3"）。如果简历中完全没有相关信息，则省略该字段。
+        6. **处理结构化地址字段:** 简历数据中的地址在 \`resumeData.personalInfo.address\` 下有 \`street\`, \`city\`, \`state\`, \`zipCode\`, \`country\` 字段。请将这些结构化地址组件与表单中对应的地址输入字段进行匹配，返回匹配到的字符串。
+        7. **处理电话字段:** 简历数据中的电话在 \`resumeData.personalInfo.phone\`。请将这个值与表单中的电话字段进行匹配，返回匹配到的字符串。
+        8. **处理文本区域（textarea）或通用文本输入框:** 如果字段是开放式文本输入（如个人简介、描述等），从简历数据中提取最相关的摘要或关键描述（summary, experience/project description）。如果问题非常开放或无法从简历中直接找到，根据问题和简历内容尝试生成一个简短、相关且积极的回答。不要留空。
+        9. 如果从简历数据中找不到合适信息，且该字段不属于规则 4 (特定正面回答) 覆盖的类型，也无法通过规则 5, 6, 7, 8 找到或推断出答案，则省略该字段的键值对。
+        10. 所有输出的值 **必须是字符串类型**。即使是数字、布尔值、日期、选择项的值/文本，也请转换为对应的字符串。
+        11. 确保你返回的JSON对象只包含需要填充的字段，并且键是传入的 formFields 中的 \`fieldId\`，值是需要填充的字符串。
 
-        Resume Data:
-        \`\`\`json
+        请将您的JSON响应放在\`\`\`json和\`\`\`标记之间。**您的整个响应内容必须且只能是包含在 \`\`\`json...\`\`\` 标记中的 JSON 对象，请不要包含任何解释性、引导性或其他额外文本。**确保格式有效。
+
+        Resume Data (structured JSON from file analysis):
+        \`\`\`jsons
         ${JSON.stringify(resumeData, null, 2)}
         \`\`\`
+
 
         Form Fields:
         \`\`\`json

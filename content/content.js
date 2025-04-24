@@ -282,7 +282,7 @@ function getVisibleFormFields() {
         id: element.id || null,
         placeholder: element.placeholder || null,
         ariaLabel: element.getAttribute('aria-label') || null,
-        // 尝试找到关联的标签文本
+        // 尝试找到关联的标签
         label: findLabelForElement(element) || null,
       };
       fields.push(fieldInfo);
@@ -2753,6 +2753,35 @@ function initialize() {
   // --- Workday Button Logic ---
   let isWorkdayBatchApplying = false; // Global state for Workday batch process
 
+  // 检查当前页面是否是 Workday 申请表单页面，如果是则处理
+  if (isWorkdayApplicationPage()) {
+    console.log("检测到 Workday 申请表单页面，准备处理...");
+    handleWorkdayApplicationForm();
+  }
+
+  
+  // 设置导航事件监听，在页面变化时重新检查
+  window.addEventListener('load', function() {
+    if (isWorkdayApplicationPage()) {
+      handleWorkdayApplicationForm();
+    }
+    checkAndEnableWorkdayButton();
+  });
+  
+  // 监听 URL 变化
+  let lastUrl = location.href;
+  new MutationObserver(() => {
+    const url = location.href;
+    if (url !== lastUrl) {
+      lastUrl = url;
+      console.log('URL 已更改，重新检查页面类型');
+      if (isWorkdayApplicationPage()) {
+        handleWorkdayApplicationForm();
+      }
+      checkAndEnableWorkdayButton();
+    }
+  }).observe(document, { subtree: true, childList: true });
+
   // Function to update Workday button states and status
   function updateWorkdayUI(isProcessing, message = "") {
     const startBtn = startWorkdayBatchButton; // Use reference from createAndInjectSidebar
@@ -2965,50 +2994,91 @@ function initialize() {
                               // *** CHECK STOP FLAG *** (Important after await)
                               if (!isWorkdayBatchApplying) break; 
 
-                              // --- Start Replacement: Wait for background signal --- 
+                              // --- 等待后台处理完成 --- 
                               console.log(`[Workday] Waiting for background signal (NEW_TAB_PROCESS_COMPLETE) for tab ID: ${newTabId}...`);
                               updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 等待后台处理...`);
 
                               try {
-                                  await new Promise((resolve, reject) => { // Keep reject for potential future use, but remove timeout logic
-                                      resolveNewTabPromise = resolve; // Store the resolver globally
-                                      
-                                  });
-                                  console.log("[Workday] Promise resolved. Proceeding after background signal."); // Updated log message
-                              } catch(e) { 
-                                   console.error("[Workday] Error awaiting promise:", e);
-                                   totalErrorCount++; 
-                                   jobLink.style.outline = '2px dashed purple'; // Mark error
-                                   continue; // Skip closing modal if promise rejected
-                              } finally {
-                                   resolveNewTabPromise = null; // Clean up resolver in all cases
-                              }
-                              // --- End Replacement --- 
+                                  // 设置上次更新时间
+                                  window.lastProcessingUpdate = Date.now();
                                   
-                              // *** CHECK STOP FLAG again after waiting for signal ***
-                              if (!isWorkdayBatchApplying) break; 
-
-                              // Now close the modal on the original page (This logic runs AFTER the promise resolves/rejects)
-                              // Important: Check if we continued due to an error above before closing modal
-                              if (jobLink.style.outline !== '2px dashed purple') { // Only close if no timeout error
-                                console.log("[Workday] Attempting to close the 'Start Your Application' modal...");
-                                const closeButton = document.querySelector(modalCloseSelector);
-                                if (closeButton && closeButton.offsetParent !== null) {
-                                    closeButton.click();
-                                    console.log("[Workday] Clicked modal close button.");
-                                    await new Promise(resolve => setTimeout(resolve, 500)); // Short pause after closing
-                                } else {
-                                    console.warn("[Workday] Could not find or click the modal close button after background signal.");
-                                }
+                                  // 创建一个带超时的Promise
+                                  await new Promise((resolve, reject) => {
+                                      // 存储全局解析器 - 用于供通信系统调用
+                                      window.resolveNewTabPromise = resolve;
+                                      
+                                      // 设置检查间隔 - 每2秒检查一次是否太久没有更新
+                                      const checkInterval = setInterval(() => {
+                                          // 如果已经停止批量处理，清除间隔并拒绝Promise
+                                          if (!isWorkdayBatchApplying) {
+                                              clearInterval(checkInterval);
+                                              reject(new Error("批量处理已停止"));
+                                              return;
+                                          }
+                                          
+                                          const now = Date.now();
+                                          // 如果30秒没收到任何更新，认为处理卡住了
+                                          if (now - window.lastProcessingUpdate > 30000) {
+                                              clearInterval(checkInterval);
+                                              reject(new Error("30秒内未收到处理更新，可能卡住了"));
+                                          }
+                                      }, 2000);
+                                      
+                                      // 设置总体超时 (40秒)
+                                      const timeoutId = setTimeout(() => {
+                                          clearInterval(checkInterval);
+                                          console.log("[Workday] 等待后台处理超时 (40秒)");
+                                          // 移除解析器
+                                          window.resolveNewTabPromise = null;
+                                          
+                                          // 拒绝Promise并带上超时消息
+                                          reject(new Error("等待后台处理超时 (40秒)"));
+                                      }, 40000);
+                                      
+                                      // 增强解析器以清除定时器
+                                      const originalResolve = resolve;
+                                      window.resolveNewTabPromise = function(result) {
+                                          clearTimeout(timeoutId);
+                                          clearInterval(checkInterval);
+                                          window.resolveNewTabPromise = null;
+                                          originalResolve(result);
+                                      };
+                                  });
+                                  
+                                  console.log("[Workday] 后台处理成功完成");
+                                  // 处理成功，标记并继续
+                                  totalProcessedCount++;
+                                  jobLink.style.opacity = '0.5';
+                                  
+                              } catch(error) { 
+                                   console.error("[Workday] 等待后台处理时出错:", error.message);
+                                   totalErrorCount++; 
+                                   jobLink.style.outline = '2px dashed purple';
+                                   
+                                   // 如果我们有标签页ID，尝试关闭它
+                                   if (newTabId) {
+                                       console.log("[Workday] 尝试关闭失败的标签页:", newTabId);
+                                       chrome.runtime.sendMessage({ 
+                                           type: 'CLOSE_TAB', 
+                                           tabId: newTabId 
+                                       });
+                                   }
+                                   
+                                   // 关闭原始页面上的模态弹窗
+                                   console.log("[Workday] 尝试关闭原始页面模态窗口");
+                                   const closeButton = document.querySelector(modalCloseSelector);
+                                   if (closeButton && closeButton.offsetParent !== null) {
+                                       closeButton.click();
+                                       console.log("[Workday] 成功点击关闭按钮");
+                                       // 短暂暂停确保UI更新
+                                       await new Promise(resolve => setTimeout(resolve, 500));
+                                   }
+                                   
+                                   // 确保清理全局解析器
+                                   window.resolveNewTabPromise = null;
+                                   continue; // 跳过剩余处理，继续下一个职位
                               }
-
-                              // Only count success if the promise didn't reject and href existed
-                              if (jobLink.style.outline !== '2px dashed purple' && jobLink.style.outline !== '2px dashed orange') {
-                                console.log("[Workday] 'Use My Last Application' step processed successfully.");
-                                totalProcessedCount++; 
-                                jobLink.style.opacity = '0.5'; 
-                              }
-                          }
+                            }
 
                       } else {
                           // 'Use My Last Application' button not found within timeout
@@ -3165,10 +3235,14 @@ function initialize() {
       // --- NEW: Handler for completion signal from background ---
       else if (message.type === 'NEW_TAB_PROCESS_COMPLETE') {
           console.log("[Content Script] Received NEW_TAB_PROCESS_COMPLETE signal.");
-          if (typeof resolveNewTabPromise === 'function') {
+          if (typeof window.resolveNewTabPromise === 'function') {
               console.log("[Content Script] Resolving the wait promise for new tab completion.");
-              resolveNewTabPromise(); // Resolve the promise to continue execution
-              resolveNewTabPromise = null; // Reset for next use
+              window.resolveNewTabPromise({
+                success: true,
+                message: message.details,
+                tabId: message.workdayTabId
+              });
+              window.resolveNewTabPromise = null; // Reset for next use
               sendResponse({ success: true }); // Acknowledge receipt
           } else {
                console.warn("[Content Script] Received completion signal, but no promise resolver was waiting.");
@@ -3176,12 +3250,1247 @@ function initialize() {
           }
           return true; // Indicate async response for this handler
       }
+      // 处理进度更新消息
+      else if (message.type === 'PROCESSING_UPDATE') {
+        console.log("收到处理进度更新:", message);
+        
+        // 更新最后收到更新的时间（明确地设置为全局变量）
+        if (typeof window.lastProcessingUpdate === 'undefined') {
+          window.lastProcessingUpdate = Date.now();
+        } else {
+          window.lastProcessingUpdate = Date.now();
+        }
+        
+        // 获取状态和详细信息
+        const status = message.status || 'processing';
+        const details = message.details || '处理中...';
+        
+        // 更新UI状态
+        const statusDiv = document.getElementById('workday-batch-status');
+        if (statusDiv) {
+          statusDiv.textContent = `处理中: ${details}`;
+        }
+        
+        // 更新处理中的UI
+        if (typeof updateWorkdayUI === 'function') {
+          updateWorkdayUI(true, `处理中: ${details}`);
+        }
+        
+        sendResponse({ success: true, message: "已处理PROCESSING_UPDATE消息" });
+      }
       // --- End of NEW handler ---
       
       // If not handling message or not async, return false or nothing
       // return false; 
   });
   // --- End Message Listener Setup ---
+
+  /**
+   * 检查当前页面是否是 Workday 申请表单页面
+   * @returns {boolean} 是否是 Workday 申请表单页面
+   */
+  function isWorkdayApplicationPage() {
+  // Regex to check if the URL matches a typical Workday application form pattern
+  // Example: https://*.myworkdayjobs.com/.../apply/application or /apply/review
+    const workdayAppRegexStrict = /myworkdayjobs\.com\/.+?\/apply\/(application|review|useMyLastApplication|jobReqId-\w+)/i;
+    console.log("[Workday Form Check] Checking URL:", window.location.href);
+    const isMatch = workdayAppRegexStrict.test(window.location.href);
+    console.log("[Workday Form Check] Is application page?", isMatch);
+    return isMatch;
+  }
+
+  /**
+   * 等待特定元素出现在页面上
+   * @param {string} selector - 要等待的元素选择器
+   * @param {number} timeout - 超时时间（毫秒）
+   * @returns {Promise<Element|null>} - 找到的元素或超时后为 null
+   */
+  function waitForElement(selector, timeout = 5000) {
+    return new Promise((resolve) => {
+      // 如果元素已存在，立即解析
+      const element = document.querySelector(selector);
+      if (element) {
+        return resolve(element);
+      }
+      
+      // 设置一个变量记录是否超时
+      let isTimedOut = false;
+      
+      // 设置超时
+      const timeoutId = setTimeout(() => {
+        isTimedOut = true;
+        console.log(`等待元素 ${selector} 超时`);
+        resolve(null);
+      }, timeout);
+      
+      // 创建一个观察器来监视 DOM 变化
+      const observer = new MutationObserver((mutations) => {
+        // 如果已经超时，停止观察
+        if (isTimedOut) {
+          observer.disconnect();
+          return;
+        }
+        
+        // 检查元素是否存在
+        const element = document.querySelector(selector);
+        if (element) {
+          observer.disconnect();
+          clearTimeout(timeoutId);
+          resolve(element);
+        }
+      });
+      
+      // 开始观察 DOM 变化
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+    });
+  }
+
+  /**
+   * 等待 Workday 加载器消失
+   * @param {number} timeout - 超时时间（毫秒）
+   * @returns {Promise<boolean>} - 是否成功等待加载完成
+   */
+  function waitForWorkdayLoader(timeout = 10000) {
+    return new Promise((resolve) => {
+      // 立即检查加载器是否不存在
+      const loader = document.querySelector('.css-1jxpxmu, [data-automation-id="loadingIndicator"]');
+      if (!loader || loader.offsetParent === null) {
+        return resolve(true);
+      }
+      
+      console.log("等待 Workday 加载器消失...");
+      
+      // 设置超时
+      const timeoutId = setTimeout(() => {
+        console.log("等待 Workday 加载器消失超时");
+        resolve(false);
+      }, timeout);
+      
+      // 创建一个观察器来监视 DOM 变化
+      const observer = new MutationObserver(() => {
+        const loader = document.querySelector('.css-1jxpxmu, [data-automation-id="loadingIndicator"]');
+        if (!loader || loader.offsetParent === null) {
+          observer.disconnect();
+          clearTimeout(timeoutId);
+          console.log("Workday 加载器已消失");
+          resolve(true);
+        }
+      });
+      
+      // 开始观察 DOM 变化
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      });
+    });
+  }
+
+  /**
+   * 处理 Workday 申请表单页面
+   * 分析表单元素，提取字段信息，使用简历数据填充
+   * TODO: 实现表单填充逻辑
+   */
+  async function handleWorkdayApplicationForm() {
+    console.log("开始处理 Workday 申请表单...");
+    let isWorkdayFormBeingHandled = true; // 标记表单正在处理中
+    let progressInterval = null;
+    
+    try {
+      // 先等待10秒，确保页面完全加载
+      console.log("等待10秒让页面完全加载...");
+      
+      // 发送状态更新
+      const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
+      if (statusDiv) statusDiv.textContent = "正在等待页面完全加载 (10秒)...";
+      
+      // 等待10秒
+      await new Promise(resolve => setTimeout(resolve, 10000));
+      console.log("等待完成，开始处理表单...");
+      
+      // 设置一个定期发送进度更新的计时器
+      const tabId = chrome.runtime.id; // 获取当前标签页ID
+      progressInterval = setInterval(() => {
+        // 发送进度更新到后台
+        chrome.runtime.sendMessage({
+          type: 'SEND_PROCESSING_UPDATE',
+          tabId: tabId,
+          details: '表单填充进行中...'
+        });
+      }, 5000); // 每5秒发送一次更新
+      
+      // 0. 等待页面加载完成
+      console.log("等待 Workday 表单元素加载...");
+      const formSelectors = [
+        '[data-automation-id]', 
+        'div[data-displayed-in-modal="true"]'
+      ];
+      
+      // 构建一个复合选择器
+      const combinedSelector = formSelectors.join(', ');
+      const formFieldElement = await waitForElement(combinedSelector, 15000);
+      
+      if (!formFieldElement) {
+        console.log("未找到 Workday 表单元素，终止处理");
+        return;
+      }
+      
+      // 更新进度消息
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '表单元素已找到，等待加载完成...'
+      });
+      
+      // 等待加载器消失
+      await waitForWorkdayLoader(12000);
+      console.log("Workday 页面加载完成，加载器已消失");
+      
+      // 1. 收集所有表单元素
+      console.log("开始收集表单元素...");
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '正在收集表单元素...'
+      });
+      
+      const formFields = collectWorkdayFormElements();
+      if (!formFields || formFields.length === 0) {
+        console.log("未找到 Workday 表单元素，终止处理");
+        return;
+      }
+      console.log(`已收集 ${formFields.length} 个表单元素`);
+      
+      // 2. 提取简历数据
+      console.log("获取简历数据...");
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '获取简历数据...'
+      });
+      
+      const resumeData = await getResumeDataFromStorage();
+      if (!resumeData) {
+        console.log("未找到已解析的简历数据，无法自动填充");
+        
+        // 更新状态消息
+        const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
+        if (statusDiv) statusDiv.textContent = "未找到已上传的简历数据。请先上传简历。";
+        
+        // 发送通知给后台脚本
+        chrome.runtime.sendMessage({
+          type: 'WORKDAY_PROCESS_COMPLETE',
+          payload: {
+            status: 'error',
+            details: '未找到已上传的简历数据'
+          }
+        });
+        
+        return;
+      }
+      console.log("简历数据获取成功");
+      
+      // 3. 发送请求匹配字段和简历数据
+      console.log("开始请求 AI 匹配字段和简历数据...");
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '正在匹配字段和简历数据...'
+      });
+      
+      let fieldMapping;
+      try {
+        fieldMapping = await matchFieldsWithResume(formFields, resumeData);
+        if (!fieldMapping) {
+          console.log("匹配请求未返回有效结果");
+          throw new Error("AI 匹配未返回有效结果");
+        }
+        console.log("AI 匹配字段数据成功");
+      } catch (matchError) {
+        console.error("匹配字段时出错:", matchError);
+        
+        // 作为备选方案，直接使用原始表单字段
+        console.log("使用原始表单字段作为备选方案");
+        fieldMapping = formFields;
+      }
+      
+      // 4. 填充表单字段
+      console.log("开始填充 Workday 表单字段...");
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '正在填充表单字段...'
+      });
+      
+      const fillResult = fillWorkdayFormFields(fieldMapping, resumeData);
+      console.log(`完成基本表单填充。成功: ${fillResult.filled}, 失败: ${fillResult.failed}`);
+      
+      // 5. 处理特殊字段（复选框、同意条款等）
+      console.log("处理特殊字段...");
+      chrome.runtime.sendMessage({
+        type: 'SEND_PROCESSING_UPDATE',
+        tabId: tabId,
+        details: '处理特殊字段...'
+      });
+      
+      await handleWorkdaySpecialFields();
+      
+      // 6. 提示用户处理完成
+      if (statusDiv) {
+        statusDiv.textContent = `Workday 表单已自动填充：成功 ${fillResult.filled} 项。请检查并手动提交。`;
+      }
+      console.log("Workday 表单自动填充完成。");
+      
+      // 7. 尝试滚动到页面底部，以查看提交按钮
+      window.scrollTo(0, document.body.scrollHeight);
+      
+      // 8. 发送完成消息给后台脚本
+      console.log("发送 WORKDAY_PROCESS_COMPLETE 消息（成功）到后台脚本。");
+      chrome.runtime.sendMessage({
+        type: 'WORKDAY_PROCESS_COMPLETE',
+        payload: {
+          status: 'success',
+          details: `表单自动填充完成，成功填充 ${fillResult.filled} 个字段`
+        }
+      });
+
+    } catch (error) {
+      console.error("处理 Workday 表单时出错:", error);
+      
+      // 更新状态消息
+      const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
+      if (statusDiv) {
+        statusDiv.textContent = "处理 Workday 表单时出错: " + error.message;
+      }
+      
+      // 发送错误消息到后台脚本
+      console.log("发送 WORKDAY_PROCESS_COMPLETE 消息（错误）到后台脚本。");
+      chrome.runtime.sendMessage({
+        type: 'WORKDAY_PROCESS_COMPLETE',
+        payload: {
+          status: 'error',
+          details: error.message
+        }
+      });
+    } finally {
+      // 清除进度更新计时器
+      if (progressInterval) {
+        clearInterval(progressInterval);
+      }
+      
+      isWorkdayFormBeingHandled = false; // 无论成功或失败，重置处理标志
+    }
+  }
+
+  /**
+   * 收集 Workday 表单元素
+   * @returns {Array} 表单字段数组
+   */
+  function collectWorkdayFormElements() {
+    console.log("收集 Workday 表单元素...");
+    
+    // 存储收集到的字段
+    const formFields = [];
+    let fieldCount = 0;
+    
+    // 简化的表单字段选择器
+    const fieldContainers = document.querySelectorAll(
+      // 主要通用选择器 - 任何带data-automation-id的元素
+      '[data-automation-id],' +
+      // 表单组和常见角色
+      'div[role="group"],' + 
+      '[role="radiogroup"],' +
+      // CSS类选择器作为备用
+      '.css-1ypndxp, .css-1u9ubqn'
+    );
+    
+    console.log(`找到 ${fieldContainers.length} 个可能的 Workday 表单字段容器`);
+    
+    // 专门处理文件上传字段
+    const fileUploadContainers = document.querySelectorAll('div[data-automation-id="fileUploadContainer"]');
+    fileUploadContainers.forEach((container, fileIndex) => {
+      try {
+        // 提取标签信息
+        let fieldLabel = '';
+        const labelElement = container.querySelector('label, [data-automation-id="formLabel"], [data-automation-id="attachmentLabel"]');
+        if (labelElement) {
+          fieldLabel = labelElement.textContent.trim();
+        } else {
+          // 尝试从周围元素提取标签
+          const parentDiv = container.closest('div[data-automation-id]');
+          if (parentDiv) {
+            const nearLabel = parentDiv.querySelector('label, [data-automation-id="formLabel"]');
+            if (nearLabel) {
+              fieldLabel = nearLabel.textContent.trim();
+            }
+          }
+        }
+        
+        if (!fieldLabel) {
+          fieldLabel = '文件上传';  // 默认标签
+        }
+        
+        // 查找文件上传输入元素
+        const uploadInput = container.querySelector('input[type="file"]');
+        if (uploadInput) {
+          const fieldId = `workday_file_${fileIndex}`;
+          
+          // 创建文件上传字段信息
+          const fieldInfo = {
+            fieldId,
+            tagName: 'input',
+            type: 'file',
+            label: fieldLabel,
+            isRequired: fieldLabel.includes('*'),
+            // 添加特殊标志，以便后续处理
+            isFileUpload: true,
+            // 保存文件接受类型
+            acceptTypes: uploadInput.getAttribute('accept') || '',
+            element: uploadInput // 保存元素引用，便于后续处理
+          };
+          
+          // 给元素添加标识属性
+          uploadInput.setAttribute('data-workday-field-id', fieldId);
+          
+          formFields.push(fieldInfo);
+          fieldCount++;
+          console.log(`找到文件上传字段: ${fieldLabel}`);
+        }
+      } catch (error) {
+        console.error(`处理文件上传字段时出错:`, error);
+      }
+    });
+    
+    // 遍历所有普通字段容器
+    fieldContainers.forEach((container, containerIndex) => {
+      try {
+        // 跳过已经处理过的文件上传容器
+        if (container.hasAttribute('data-automation-id') && 
+            container.getAttribute('data-automation-id') === 'fileUploadContainer') {
+          return;
+        }
+        
+        // 获取字段标签
+        let fieldLabel = '';
+        const labelElement = container.querySelector(
+          'label, [data-automation-id="formLabel"], [data-automation-id="promptLabel"], ' +
+          '[data-automation-label="true"], .css-1unemfe, .css-1tqo8qc'
+        );
+        
+        if (labelElement) {
+          fieldLabel = labelElement.textContent.trim();
+        }
+        
+        // 如果没有直接找到标签，尝试其他方法
+        if (!fieldLabel) {
+          // 检查 aria-label 属性
+          if (container.hasAttribute('aria-label')) {
+            fieldLabel = container.getAttribute('aria-label').trim();
+          } 
+          // 尝试从data-automation-id属性推断字段类型
+          else if (container.hasAttribute('data-automation-id')) {
+            const automationId = container.getAttribute('data-automation-id');
+            if (automationId.includes('firstName')) {
+              fieldLabel = '名字';
+            } else if (automationId.includes('lastName')) {
+              fieldLabel = '姓氏';
+            } else if (automationId.includes('email')) {
+              fieldLabel = '电子邮件';
+            } else if (automationId.includes('phone')) {
+              fieldLabel = '电话';
+            } else if (automationId.includes('country')) {
+              fieldLabel = '国家';
+            }
+          }
+          // 尝试查找问题标题
+          else if (container.hasAttribute('data-automation-id') && 
+                   container.getAttribute('data-automation-id') === 'questionnaireQuestion') {
+            const questionTitle = container.querySelector('.css-1p3ni5g, [data-automation-id="questionLabel"]');
+            if (questionTitle) {
+              fieldLabel = questionTitle.textContent.trim();
+            }
+          }
+          // 尝试查找相邻的标签文本
+          else {
+            const siblingLabel = container.previousElementSibling;
+            if (siblingLabel && 
+                (siblingLabel.tagName.toLowerCase() === 'label' || 
+                 siblingLabel.classList.contains('css-1unemfe'))) {
+              fieldLabel = siblingLabel.textContent.trim();
+            }
+          }
+          
+          // 尝试查找legend元素作为标签
+          if (!fieldLabel) {
+            const legendElement = container.querySelector('legend');
+            if (legendElement) {
+              fieldLabel = legendElement.textContent.trim();
+            }
+          }
+        }
+        
+        // 如果依然没有标签但有自定义数据属性，尝试生成一个标签
+        if (!fieldLabel && container.hasAttribute('data-automation-id')) {
+          fieldLabel = `字段-${container.getAttribute('data-automation-id')}`;
+        }
+        
+        // 查找输入元素（文本输入、下拉框、复选框、单选框等）
+        let inputElements = container.querySelectorAll(
+          'input, select, textarea, ' +
+          '[data-automation-id="dateInputIcon"], ' +  // 日期选择器
+          '[data-automation-id="promptOption"], ' +   // 单选/复选选项
+          '[data-automation-id="checkboxInput"], ' +  // 复选框输入
+          '[data-automation-id="radioInput"], ' +     // 单选按钮输入
+          '[data-automation-id="searchBox"], ' +      // 搜索框
+          '[role="listbox"], [role="combobox"]'       // 自定义下拉框
+        );
+        
+        // 如果没有找到输入元素，查找特殊的 Workday 输入组件
+        if (inputElements.length === 0) {
+          const possibleInputContainers = container.querySelectorAll(
+            '[data-automation-id$="InputBox"], ' +      // 任何以InputBox结尾的元素
+            '[data-automation-id$="Input"], ' +         // 任何以Input结尾的元素 
+            '[data-uxi-widget-type]'                    // 带uxi小部件类型的元素
+          );
+          
+          if (possibleInputContainers.length > 0) {
+            // 对于每个容器，查找实际的输入元素
+            const tempElements = [];
+            possibleInputContainers.forEach(container => {
+              const innerInputs = container.querySelectorAll('input, select, textarea');
+              innerInputs.forEach(input => tempElements.push(input));
+              
+              // 检查特殊的Workday输入组件（可能没有标准input元素）
+              if (innerInputs.length === 0) {
+                // 对于下拉框，查找div
+                const selectDiv = container.querySelector('[role="listbox"], [role="combobox"]');
+                if (selectDiv) {
+                  tempElements.push(selectDiv);
+                }
+                
+                // 对于日期选择器，查找日期图标
+                const dateIcon = container.querySelector('[data-automation-id="dateInputIcon"]');
+                if (dateIcon) {
+                  tempElements.push(dateIcon);
+                }
+                
+                // 如果仍然没有找到元素，但容器本身可能是输入元素
+                if (container.hasAttribute('tabindex') || 
+                    container.hasAttribute('role') ||
+                    container.hasAttribute('data-automation-id')) {
+                  tempElements.push(container);
+                }
+              }
+            });
+            
+            if (tempElements.length > 0) {
+              inputElements = tempElements;
+            }
+          }
+        }
+        
+        // 处理所有找到的输入元素
+        if (inputElements.length > 0) {
+          Array.from(inputElements).forEach((inputElement, inputIndex) => {
+            // 跳过隐藏元素
+            if (inputElement.type === 'hidden' || 
+                (inputElement.offsetParent === null && !inputElement.hasAttribute('data-automation-id'))) {
+              return;
+            }
+            
+            // 获取元素类型和附加属性
+            const tagName = inputElement.tagName ? inputElement.tagName.toLowerCase() : 'div';
+            let type = inputElement.getAttribute('type') || tagName;
+            const automationId = inputElement.getAttribute('data-automation-id') || '';
+            const role = inputElement.getAttribute('role') || '';
+            
+            // 检测特殊日期元素
+            if (automationId === 'dateInputIcon' || 
+                inputElement.closest('[data-automation-id="dateTimeInputBox"]')) {
+              type = 'date';
+            }
+            
+            // 检测特殊下拉元素
+            if (role === 'listbox' || role === 'combobox' || 
+                inputElement.closest('[data-automation-id="selectInputBox"]')) {
+              type = 'select-one';
+            }
+            
+            // 创建唯一标识
+            const fieldId = `workday_field_${containerIndex}_${inputIndex}`;
+            
+            // 根据元素类型收集不同的信息
+            let fieldInfo = {
+              fieldId,
+              tagName,
+              type,
+              automationId,
+              role,
+              label: fieldLabel,
+              isRequired: fieldLabel.includes('*'),
+              element: inputElement  // 保存对元素的引用，方便后续处理
+            };
+            
+            // 为下拉框添加选项信息
+            if (tagName === 'select' || type === 'select-one') {
+              fieldInfo.options = [];
+              
+              // 对于标准select元素
+              if (tagName === 'select') {
+                fieldInfo.options = Array.from(inputElement.options).map(option => ({
+                  value: option.value,
+                  text: option.text
+                })).filter(opt => opt.value && opt.text);
+              } 
+              // 对于自定义下拉元素，尝试找到选项
+              else if (role === 'listbox' || role === 'combobox') {
+                const optionElements = document.querySelectorAll('[role="option"]');
+                if (optionElements.length > 0) {
+                  fieldInfo.options = Array.from(optionElements).map(option => ({
+                    value: option.getAttribute('data-value') || option.id || option.textContent,
+                    text: option.textContent.trim()
+                  })).filter(opt => opt.text);
+                }
+              }
+            }
+            
+            // 为单选/复选框添加特定信息
+            if (type === 'radio' || type === 'checkbox' || automationId === 'radioInput' || automationId === 'checkboxInput') {
+              // 查找相同名称的所有单选/复选框，它们属于同一组
+              const groupName = inputElement.getAttribute('name');
+              fieldInfo.isGroup = true;
+              
+              if (groupName) {
+                const sameNameInputs = document.querySelectorAll(`input[name="${groupName}"]`);
+                fieldInfo.groupName = groupName;
+                fieldInfo.groupOptions = Array.from(sameNameInputs).map(input => {
+                  const optionLabel = findLabelForElement(input) || '';
+                  return {
+                    value: input.value,
+                    label: optionLabel
+                  };
+                });
+              } 
+              // 对于Workday特殊单选/复选框
+              else {
+                // 尝试收集选项信息
+                const optionElements = container.querySelectorAll('[data-automation-id="promptOption"], [role="radio"], [role="checkbox"]');
+                if (optionElements.length > 0) {
+                  fieldInfo.groupOptions = Array.from(optionElements).map(option => ({
+                    value: option.getAttribute('data-automation-id') || option.id,
+                    label: option.textContent.trim()
+                  }));
+                }
+              }
+            }
+            
+            // 处理日期选择器
+            if (type === 'date') {
+              fieldInfo.dateFormat = 'YYYY-MM-DD'; // 默认日期格式
+              
+              // 查找相关的文本输入框以获取更多信息
+              const dateInputContainer = inputElement.closest('[data-automation-id="dateTimeInputBox"]');
+              if (dateInputContainer) {
+                const textInput = dateInputContainer.querySelector('input[type="text"]');
+                if (textInput) {
+                  // 保存对文本输入框的引用
+                  fieldInfo.textInputElement = textInput;
+                  
+                  // 尝试从占位符推断日期格式
+                  const placeholder = textInput.getAttribute('placeholder');
+                  if (placeholder) {
+                    if (placeholder.includes('MM/DD/YYYY')) {
+                      fieldInfo.dateFormat = 'MM/DD/YYYY';
+                    } else if (placeholder.includes('DD/MM/YYYY')) {
+                      fieldInfo.dateFormat = 'DD/MM/YYYY';
+                    } else if (placeholder.includes('YYYY-MM-DD')) {
+                      fieldInfo.dateFormat = 'YYYY-MM-DD';
+                    }
+                  }
+                }
+              }
+            }
+            
+            // 给元素添加标识属性，以便后续更容易引用
+            if (inputElement instanceof Element) {
+              inputElement.setAttribute('data-workday-field-id', fieldId);
+            }
+            
+            // 添加到字段列表
+            formFields.push(fieldInfo);
+            fieldCount++;
+            console.log(`找到表单字段: ${fieldLabel} (类型: ${type})`);
+          });
+        }
+      } catch (error) {
+        console.error(`处理表单字段容器时出错:`, error);
+      }
+    });
+    
+    console.log(`总共收集到 ${fieldCount} 个 Workday 表单字段`);
+    return formFields;
+  }
+
+  /**
+   * 填充Workday表单字段
+   * @param {Array} formFields - 由collectWorkdayFormElements函数收集的表单字段
+   * @param {Object} resumeData - 简历数据
+   * @returns {number} - 成功填充的字段数量
+   */
+  function fillWorkdayFormFields(formFields, resumeData) {
+    console.log("开始填充Workday表单字段...");
+    
+    if (!formFields || !Array.isArray(formFields) || formFields.length === 0) {
+      console.error("没有找到可填充的Workday表单字段");
+      return { filled: 0, failed: 0 };
+    }
+    
+    if (!resumeData) {
+      console.error("没有简历数据可用于填充");
+      return { filled: 0, failed: 0 };
+    }
+    
+    let filledCount = 0;
+    let failedCount = 0;
+    
+    // 创建标签与简历字段的映射关系
+    const labelMappings = {
+      // 个人信息
+      '名字': resumeData.first_name || resumeData.name?.split(' ')[0],
+      '姓氏': resumeData.last_name || (resumeData.name && resumeData.name.includes(' ') ? resumeData.name.split(' ').slice(1).join(' ') : ''),
+      '名': resumeData.first_name || resumeData.name?.split(' ')[0],
+      '姓': resumeData.last_name || (resumeData.name && resumeData.name.includes(' ') ? resumeData.name.split(' ').slice(1).join(' ') : ''),
+      '电子邮件': resumeData.email,
+      '电话': resumeData.phone,
+      '手机': resumeData.phone,
+      '地址': resumeData.address || resumeData.location,
+      '城市': resumeData.city,
+      '邮编': resumeData.zip || resumeData.postal_code,
+      '国家': resumeData.country || 'China',
+      '国籍': resumeData.nationality || 'Chinese',
+      
+      // 教育信息
+      '学校名称': resumeData.education && resumeData.education[0] ? resumeData.education[0].institution : '',
+      '学位': resumeData.education && resumeData.education[0] ? resumeData.education[0].degree : '',
+      '专业': resumeData.education && resumeData.education[0] ? resumeData.education[0].field_of_study : '',
+      '入学日期': resumeData.education && resumeData.education[0] ? resumeData.education[0].start_date : '',
+      '毕业日期': resumeData.education && resumeData.education[0] ? resumeData.education[0].end_date : '',
+      '在校时间': resumeData.education && resumeData.education[0] ? `${resumeData.education[0].start_date} - ${resumeData.education[0].end_date}` : '',
+      
+      // 工作经验
+      '公司名称': resumeData.experience && resumeData.experience[0] ? resumeData.experience[0].company : '',
+      '职位': resumeData.experience && resumeData.experience[0] ? resumeData.experience[0].position : '',
+      '开始日期': resumeData.experience && resumeData.experience[0] ? resumeData.experience[0].start_date : '',
+      '结束日期': resumeData.experience && resumeData.experience[0] ? resumeData.experience[0].end_date : '',
+      '工作描述': resumeData.experience && resumeData.experience[0] ? resumeData.experience[0].description : '',
+      
+      // 技能和语言
+      '技能': resumeData.skills ? (Array.isArray(resumeData.skills) ? resumeData.skills.join(', ') : resumeData.skills) : '',
+      '语言': resumeData.languages ? (Array.isArray(resumeData.languages) ? resumeData.languages.join(', ') : resumeData.languages) : '',
+      
+      // 其他常见字段
+      '网站': resumeData.website || resumeData.linkedin,
+      'LinkedIn': resumeData.linkedin,
+      '个人网站': resumeData.website,
+      '工作许可': '是', // 默认值，这应该根据实际情况调整
+      '推荐人': resumeData.references && resumeData.references[0] ? resumeData.references[0].name : '',
+      
+      // 新增常见字段
+      '姓名': resumeData.name,
+      '全名': resumeData.name,
+      '家庭住址': resumeData.address || resumeData.location,
+      '手机号码': resumeData.phone,
+      '电子邮箱': resumeData.email,
+      '工作年限': resumeData.years_of_experience || '3',
+      '期望薪资': resumeData.expected_salary || '',
+      '自我介绍': resumeData.summary || '',
+      '个人简介': resumeData.summary || '',
+    };
+    
+    // 扩展标签映射以包含更多常见变体
+    const extendedMappings = {};
+    Object.keys(labelMappings).forEach(key => {
+      // 添加原始键
+      extendedMappings[key] = labelMappings[key];
+      
+      // 添加键的小写版本
+      extendedMappings[key.toLowerCase()] = labelMappings[key];
+      
+      // 添加常见的英文变体
+      const englishMappings = {
+        '名字': 'First Name',
+        '姓氏': 'Last Name',
+        '名': 'First Name',
+        '姓': 'Last Name',
+        '电子邮件': 'Email',
+        '电话': 'Phone',
+        '手机': 'Mobile',
+        '地址': 'Address',
+        '城市': 'City',
+        '邮编': 'Zip',
+        '国家': 'Country',
+        '国籍': 'Nationality',
+        '学校名称': 'School',
+        '学位': 'Degree',
+        '专业': 'Major',
+        '入学日期': 'Start Date',
+        '毕业日期': 'End Date',
+        '在校时间': 'Education Period',
+        '公司名称': 'Company',
+        '职位': 'Position',
+        '开始日期': 'Start Date',
+        '结束日期': 'End Date',
+        '工作描述': 'Description',
+        '技能': 'Skills',
+        '语言': 'Languages',
+        '网站': 'Website',
+        'LinkedIn': 'LinkedIn',
+        '个人网站': 'Personal Website',
+        '工作许可': 'Work Authorization',
+        '推荐人': 'References',
+        '姓名': 'Full Name',
+        '全名': 'Full Name',
+        '家庭住址': 'Home Address',
+        '手机号码': 'Mobile Number',
+        '电子邮箱': 'Email Address',
+        '工作年限': 'Years of Experience',
+        '期望薪资': 'Expected Salary',
+        '自我介绍': 'Self Introduction',
+        '个人简介': 'Profile Summary'
+      };
+      
+      if (englishMappings[key]) {
+        extendedMappings[englishMappings[key]] = labelMappings[key];
+        extendedMappings[englishMappings[key].toLowerCase()] = labelMappings[key];
+      }
+    });
+    
+    // 填充每个字段
+    formFields.forEach(field => {
+      try {
+        // 跳过文件上传字段
+        if (field.isFileUpload) {
+          console.log(`跳过文件上传字段: ${field.label}`);
+          return;
+        }
+        
+        // 根据字段标签查找匹配的简历数据
+        const fieldLabel = field.label.replace('*', '').trim(); // 移除必填星号
+        let valueToFill = null;
+        
+        // 直接匹配标签
+        if (extendedMappings[fieldLabel]) {
+          valueToFill = extendedMappings[fieldLabel];
+        } 
+        // 尝试部分匹配（标签包含关键词）
+        else {
+          for (const key of Object.keys(extendedMappings)) {
+            if (fieldLabel.toLowerCase().includes(key.toLowerCase()) && extendedMappings[key]) {
+              valueToFill = extendedMappings[key];
+              break;
+            }
+          }
+        }
+        
+        // 对于一些特殊字段类型，尝试更智能的匹配
+        if (!valueToFill) {
+          // 尝试根据字段类型和标签关键词进行匹配
+          if (field.type === 'date' || field.tagName === 'date') {
+            if (fieldLabel.toLowerCase().includes('生日') || fieldLabel.toLowerCase().includes('birth')) {
+              valueToFill = resumeData.birth_date || resumeData.date_of_birth || '';
+            }
+          } else if (field.type === 'tel' || fieldLabel.toLowerCase().includes('电话') || fieldLabel.toLowerCase().includes('phone')) {
+            valueToFill = resumeData.phone || '';
+          } else if (field.type === 'email' || fieldLabel.toLowerCase().includes('邮件') || fieldLabel.toLowerCase().includes('email')) {
+            valueToFill = resumeData.email || '';
+          }
+        }
+        
+        // 如果没有找到有效的值，尝试使用特殊字段处理 
+        if (!valueToFill || valueToFill === '') {
+          // 对于是/否问题，通常选择"是"
+          if ((field.type === 'radio' || field.type === 'checkbox') && field.isGroup && field.groupOptions) {
+            if (field.groupOptions.length === 2) {
+              const yesOption = field.groupOptions.find(opt => 
+                opt.label.toLowerCase().includes('yes') || 
+                opt.label.toLowerCase().includes('是')
+              );
+              
+              if (yesOption) {
+                // 这里不直接填充，而是在下面的代码中处理
+                valueToFill = yesOption.value;
+              }
+            }
+          }
+          // 对于工作授权或工作许可问题
+          else if (fieldLabel.toLowerCase().includes('授权') || 
+                   fieldLabel.toLowerCase().includes('许可') || 
+                   fieldLabel.toLowerCase().includes('authorization') || 
+                   fieldLabel.toLowerCase().includes('permit')) {
+            valueToFill = '是' || 'Yes';
+          }
+        }
+        
+        // 如果找到了要填充的值
+        if (valueToFill) {
+          // 获取字段元素
+          let element = field.element;
+          if (!element) {
+            element = document.querySelector(`[data-workday-field-id="${field.fieldId}"]`);
+          }
+          
+          if (!element) {
+            console.log(`找不到字段元素: ${field.label} (ID: ${field.fieldId})`);
+            failedCount++;
+            return;
+          }
+          
+          // 根据字段类型进行不同的填充操作
+          switch (field.type) {
+            case 'text':
+            case 'email':
+            case 'tel':
+            case 'textarea':
+              if (element.value === '') {
+                element.value = valueToFill;
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                filledCount++;
+                console.log(`填充文本字段: ${field.label} = ${valueToFill}`);
+              }
+              break;
+              
+            case 'select-one':
+              if (element.value === '') {
+                // 尝试匹配选项文本
+                let optionFound = false;
+                // 对于标准select元素
+                if (element.tagName && element.tagName.toLowerCase() === 'select') {
+                  for (let i = 0; i < element.options.length; i++) {
+                    const option = element.options[i];
+                    // 检查选项文本是否包含要填充的值（大小写不敏感）
+                    if (option.text.toLowerCase().includes(valueToFill.toLowerCase()) ||
+                        valueToFill.toLowerCase().includes(option.text.toLowerCase())) {
+                      element.value = option.value;
+                      element.selectedIndex = i;
+                      element.dispatchEvent(new Event('change', { bubbles: true }));
+                      filledCount++;
+                      optionFound = true;
+                      console.log(`填充下拉框: ${field.label} = ${option.text}`);
+                      break;
+                    }
+                  }
+                  
+                  // 如果没有找到精确匹配，尝试使用更宽松的匹配
+                  if (!optionFound && element.options.length > 0) {
+                    // 跳过第一个选项，通常是"请选择"
+                    if (element.options.length > 1) {
+                      element.selectedIndex = 1;
+                      element.dispatchEvent(new Event('change', { bubbles: true }));
+                      filledCount++;
+                      console.log(`填充下拉框（使用默认选项）: ${field.label} = ${element.options[1].text}`);
+                    }
+                  }
+                } 
+                // 对于自定义下拉元素
+                else if (field.role === 'listbox' || field.role === 'combobox') {
+                  // 点击元素打开下拉框
+                  element.click();
+                  setTimeout(() => {
+                    // 查找选项并点击匹配的选项
+                    const options = document.querySelectorAll('[role="option"]');
+                    for (const option of options) {
+                      if (option.textContent.toLowerCase().includes(valueToFill.toLowerCase()) ||
+                          valueToFill.toLowerCase().includes(option.textContent.toLowerCase())) {
+                        option.click();
+                        filledCount++;
+                        optionFound = true;
+                        console.log(`填充自定义下拉框: ${field.label} = ${option.textContent}`);
+                        break;
+                      }
+                    }
+                    
+                    // 如果没找到匹配项，选择第一个非空选项
+                    if (!optionFound && options.length > 0) {
+                      // 通常第一个是"请选择"，所以尝试第二个
+                      if (options.length > 1) {
+                        options[1].click();
+                        filledCount++;
+                        console.log(`填充自定义下拉框（默认选项）: ${field.label} = ${options[1].textContent}`);
+                      } else {
+                        options[0].click();
+                        filledCount++;
+                        console.log(`填充自定义下拉框（唯一选项）: ${field.label} = ${options[0].textContent}`);
+                      }
+                    }
+                  }, 500);
+                }
+              }
+              break;
+              
+            case 'date':
+              // 处理日期字段
+              if (valueToFill) {
+                // 查找相关的日期输入框（通常在日期图标附近）
+                const dateContainer = element.closest('[data-automation-id="dateTimeInputBox"]');
+                let textInput = null;
+                
+                if (dateContainer) {
+                  textInput = dateContainer.querySelector('input[type="text"]');
+                } else if (field.textInputElement) {
+                  textInput = field.textInputElement;
+                }
+                
+                if (textInput && textInput.value === '') {
+                  // 根据占位符格式化日期
+                  let formattedDate = valueToFill;
+                  const placeholder = textInput.getAttribute('placeholder');
+                  
+                  // 尝试以各种格式解析日期
+                  try {
+                    // 尝试解析各种可能的日期格式
+                    let dateObj = null;
+                    // ISO格式: YYYY-MM-DD
+                    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(valueToFill)) {
+                      dateObj = new Date(valueToFill);
+                    } 
+                    // US格式: MM/DD/YYYY
+                    else if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(valueToFill)) {
+                      const parts = valueToFill.split('/');
+                      dateObj = new Date(parts[2], parts[0] - 1, parts[1]);
+                    } 
+                    // EU格式: DD/MM/YYYY
+                    else if (/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(valueToFill)) {
+                      const parts = valueToFill.split('.');
+                      dateObj = new Date(parts[2], parts[1] - 1, parts[0]);
+                    }
+                    // 尝试直接解析
+                    else {
+                      dateObj = new Date(valueToFill);
+                    }
+                    
+                    if (!isNaN(dateObj.getTime())) {
+                      if (placeholder && placeholder.includes('MM/DD/YYYY')) {
+                        formattedDate = `${(dateObj.getMonth() + 1).toString().padStart(2, '0')}/${dateObj.getDate().toString().padStart(2, '0')}/${dateObj.getFullYear()}`;
+                      } else if (placeholder && placeholder.includes('DD/MM/YYYY')) {
+                        formattedDate = `${dateObj.getDate().toString().padStart(2, '0')}/${(dateObj.getMonth() + 1).toString().padStart(2, '0')}/${dateObj.getFullYear()}`;
+                      } else {
+                        formattedDate = `${dateObj.getFullYear()}-${(dateObj.getMonth() + 1).toString().padStart(2, '0')}-${dateObj.getDate().toString().padStart(2, '0')}`;
+                      }
+                    }
+                  } catch (error) {
+                    console.error(`日期解析错误:`, error);
+                  }
+                  
+                  textInput.value = formattedDate;
+                  textInput.dispatchEvent(new Event('input', { bubbles: true }));
+                  textInput.dispatchEvent(new Event('change', { bubbles: true }));
+                  filledCount++;
+                  console.log(`填充日期字段: ${field.label} = ${formattedDate}`);
+                } else {
+                  // 尝试直接点击日期图标，可能会打开日期选择器
+                  element.click();
+                  console.log(`点击日期图标: ${field.label}`);
+                }
+              }
+              break;
+              
+            case 'radio':
+              if (field.isGroup && field.groupOptions) {
+                // 对于YES/NO类型的问题，通常选择YES
+                if (field.groupOptions.length === 2) {
+                  const yesOption = field.groupOptions.find(opt => 
+                    opt.label.toLowerCase().includes('yes') || 
+                    opt.label.toLowerCase().includes('是')
+                  );
+                  
+                  if (yesOption) {
+                    const radioButton = document.querySelector(`input[type="radio"][value="${yesOption.value}"]`);
+                    if (radioButton && !radioButton.checked) {
+                      radioButton.checked = true;
+                      radioButton.dispatchEvent(new Event('change', { bubbles: true }));
+                      filledCount++;
+                      console.log(`选择单选按钮: ${field.label} = ${yesOption.label}`);
+                    }
+                  }
+                }
+                // 对于其他单选按钮组，尝试根据值匹配
+                else if (valueToFill) {
+                  // 尝试找到匹配值的选项
+                  const matchedOption = field.groupOptions.find(opt => 
+                    opt.label.toLowerCase().includes(valueToFill.toLowerCase()) || 
+                    valueToFill.toLowerCase().includes(opt.label.toLowerCase())
+                  );
+                  
+                  if (matchedOption) {
+                    const radioButton = document.querySelector(`input[type="radio"][value="${matchedOption.value}"]`);
+                    if (radioButton && !radioButton.checked) {
+                      radioButton.checked = true;
+                      radioButton.dispatchEvent(new Event('change', { bubbles: true }));
+                      filledCount++;
+                      console.log(`选择单选按钮: ${field.label} = ${matchedOption.label}`);
+                    }
+                  }
+                  // 如果没有找到匹配项，尝试选择第一个选项
+                  else if (field.groupOptions.length > 0) {
+                    const firstOption = field.groupOptions[0];
+                    const radioButton = document.querySelector(`input[type="radio"][value="${firstOption.value}"]`);
+                    if (radioButton && !radioButton.checked) {
+                      radioButton.checked = true;
+                      radioButton.dispatchEvent(new Event('change', { bubbles: true }));
+                      filledCount++;
+                      console.log(`选择单选按钮(默认第一个): ${field.label} = ${firstOption.label}`);
+                    }
+                  }
+                }
+              }
+              break;
+              
+            case 'checkbox':
+              // 对于复选框，根据上下文决定是否选中
+              if (field.label.toLowerCase().includes('同意') || 
+                  field.label.toLowerCase().includes('agree') || 
+                  field.label.toLowerCase().includes('accept') || 
+                  field.label.toLowerCase().includes('条款') || 
+                  field.label.toLowerCase().includes('terms')) {
+                if (!element.checked) {
+                  element.checked = true;
+                  element.dispatchEvent(new Event('change', { bubbles: true }));
+                  filledCount++;
+                  console.log(`勾选复选框: ${field.label}`);
+                }
+              }
+              break;
+              
+            default:
+              // 尝试作为普通输入框填充
+              if (element.value === undefined || element.value === '') {
+                if (element.tagName && element.tagName.toLowerCase() === 'input') {
+                  element.value = valueToFill;
+                  element.dispatchEvent(new Event('input', { bubbles: true }));
+                  element.dispatchEvent(new Event('change', { bubbles: true }));
+                  filledCount++;
+                  console.log(`填充默认输入字段: ${field.label} = ${valueToFill}`);
+                } else {
+                  // 对于其他元素，尝试点击
+                  element.click();
+                  console.log(`点击未知类型元素: ${field.label}`);
+                }
+              }
+              break;
+          }
+        } else {
+          console.log(`未找到匹配的值: ${field.label}`);
+          failedCount++;
+        }
+      } catch (error) {
+        console.error(`填充字段时出错: ${field.label}`, error);
+        failedCount++;
+      }
+    });
+    
+    console.log(`表单填充完成。成功填充: ${filledCount} 个字段，失败: ${failedCount} 个字段`);
+    return { filled: filledCount, failed: failedCount };
+  }
+
+  /**
+   * 处理 Workday 特殊字段，如复选框和同意条款
+   */
+  async function handleWorkdaySpecialFields() {
+    console.log("处理 Workday 特殊字段...");
+    
+    // 处理复选框（特别是同意条款和条件的复选框）
+    const checkboxes = document.querySelectorAll('input[type="checkbox"]:not([data-workday-filled="true"])');
+    let checkboxCount = 0;
+    
+    for (const checkbox of checkboxes) {
+      if (checkbox.offsetParent === null) continue; // 跳过不可见元素
+      
+      // 获取复选框标签
+      let checkboxLabel = '';
+      if (checkbox.id) {
+        const label = document.querySelector(`label[for="${checkbox.id}"]`);
+        if (label) {
+          checkboxLabel = label.textContent.trim().toLowerCase();
+        }
+      }
+      
+      if (!checkboxLabel) {
+        const parentLabel = checkbox.closest('label');
+        if (parentLabel) {
+          checkboxLabel = parentLabel.textContent.trim().toLowerCase();
+        }
+      }
+      
+      // 检查是否是同意条款的复选框
+      if (checkboxLabel.includes('agree') || checkboxLabel.includes('terms') || 
+          checkboxLabel.includes('consent') || checkboxLabel.includes('privacy') ||
+          checkboxLabel.includes('条款') || checkboxLabel.includes('同意') ||
+          checkboxLabel.includes('隐私')) {
+        
+        console.log(`找到需要勾选的条款复选框: ${checkboxLabel}`);
+        
+        // 勾选复选框
+        checkbox.checked = true;
+        checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+        checkbox.setAttribute('data-workday-filled', 'true');
+        checkboxCount++;
+      }
+    }
+    
+    // 处理下拉选择框
+    const selectElements = document.querySelectorAll('select:not([data-workday-filled="true"])');
+    let selectCount = 0;
+    
+    for (const select of selectElements) {
+      if (select.offsetParent === null) continue; // 跳过不可见元素
+      
+      // 检查是否已有选择
+      if (select.selectedIndex > 0) continue; // 跳过已有选择的
+      
+      // 获取选择框标签
+      let selectLabel = '';
+      if (select.id) {
+        const label = document.querySelector(`label[for="${select.id}"]`);
+        if (label) {
+          selectLabel = label.textContent.trim().toLowerCase();
+        }
+      }
+      
+      // 查找特殊选择框
+      if (selectLabel.includes('country') || selectLabel.includes('国家')) {
+        // 尝试选择中国或美国选项
+        for (const option of select.options) {
+          const optionText = option.text.trim().toLowerCase();
+          if (optionText.includes('china') || optionText.includes('中国')) {
+            select.value = option.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            select.setAttribute('data-workday-filled', 'true');
+            selectCount++;
+            break;
+          }
+        }
+      } else if (selectLabel.includes('source') || selectLabel.includes('来源')) {
+        // 尝试选择来源
+        for (const option of select.options) {
+          const optionText = option.text.trim().toLowerCase();
+          if (optionText.includes('internet') || optionText.includes('job board') || 
+              optionText.includes('linkedin') || optionText.includes('indeed')) {
+            select.value = option.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            select.setAttribute('data-workday-filled', 'true');
+            selectCount++;
+            break;
+          }
+        }
+      }
+    }
+    
+    console.log(`处理了 ${checkboxCount} 个复选框和 ${selectCount} 个特殊下拉框`);
+  }
 }
 
   // 检查当前是否为 Workday 页面并启用按钮
@@ -3260,10 +4569,76 @@ else { initialize(); }
 // --- 消息监听 ---
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Content script received message:", message.type);
+  
   if (message.type === 'UPDATE_STATUS') {
     const statusMessage = document.getElementById('status-message');
     if (statusMessage) { statusMessage.textContent = message.payload; }
     sendResponse({ success: true });
+  }
+  // 处理来自后台脚本的新标签页处理完成消息
+  else if (message.type === 'NEW_TAB_PROCESS_COMPLETE') {
+    console.log("收到后台脚本的处理完成消息:", message);
+    
+    // 获取处理状态和详细信息
+    const status = message.status || 'unknown';
+    const details = message.details || '';
+    const workdayTabId = message.workdayTabId;
+    
+    // 更新UI状态
+    const statusDiv = document.getElementById('workday-batch-status');
+    if (statusDiv) {
+      if (status === 'success') {
+        statusDiv.textContent = `Workday标签页处理成功: ${details}`;
+      } else if (status === 'error') {
+        statusDiv.textContent = `Workday标签页处理出错: ${details}`;
+      } else {
+        statusDiv.textContent = `Workday标签页处理结束: ${status}`;
+      }
+    }
+    
+    console.log(`解析NEW_TAB_PROCESS_COMPLETE，解析Promise...`);
+    
+    // 如果已经设置了解析器，使用它来完成Promise
+    if (typeof window.resolveNewTabPromise === 'function') {
+      console.log("找到等待的Promise解析器，正在解析...");
+      window.resolveNewTabPromise({
+        success: status === 'success',
+        message: details,
+        tabId: workdayTabId
+      });
+    } else {
+      console.warn("没有找到等待的Promise解析器，可能已经超时或批量流程已停止");
+    }
+    
+    sendResponse({ success: true, message: "已处理NEW_TAB_PROCESS_COMPLETE消息" });
+  }
+  // 处理进度更新消息
+  else if (message.type === 'PROCESSING_UPDATE') {
+    console.log("收到处理进度更新:", message);
+    
+    // 更新最后收到更新的时间（明确地设置为全局变量）
+    if (typeof window.lastProcessingUpdate === 'undefined') {
+      window.lastProcessingUpdate = Date.now();
+    } else {
+      window.lastProcessingUpdate = Date.now();
+    }
+    
+    // 获取状态和详细信息
+    const status = message.status || 'processing';
+    const details = message.details || '处理中...';
+    
+    // 更新UI状态
+    const statusDiv = document.getElementById('workday-batch-status');
+    if (statusDiv) {
+      statusDiv.textContent = `处理中: ${details}`;
+    }
+    
+    // 更新处理中的UI
+    if (typeof updateWorkdayUI === 'function') {
+      updateWorkdayUI(true, `处理中: ${details}`);
+    }
+    
+    sendResponse({ success: true, message: "已处理PROCESSING_UPDATE消息" });
   }
 }); 
 
