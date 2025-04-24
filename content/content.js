@@ -20,7 +20,7 @@ function createAndInjectSidebar() {
       height: 100%;
       background: white;
       box-shadow: -2px 0 5px rgba(0,0,0,0.2);
-      z-index: 9999;
+      z-index: 99999;
       overflow-y: auto;
       transition: transform 0.3s ease;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
@@ -126,14 +126,25 @@ function createAndInjectSidebar() {
       </label>
       <div id="status-message">请先上传简历</div>
     </div>
-    
+
     <div class="sidebar-section">
       <button id="fill-form-button" class="sidebar-button">填充当前页面表单</button>
-      <button id="batch-apply-button" class="sidebar-button" style="margin-top: 10px; background-color: #4CAF50;">批量自动投递简历</button>
+      <button id="batch-apply-button" class="sidebar-button" style="margin-top: 10px; background-color: #4CAF50;">批量自动投递简历 (LinkedIn)</button>
     </div>
-    
+
+    <div class="sidebar-section" id="workday-controls" style="border-top: 1px solid #eee; padding-top: 15px;">
+      <h3 style="margin-bottom: 5px;">Workday 批量申请</h3>
+      <button id="start-workday-batch" class="sidebar-button" style="background-color: #FF9800;" disabled>开始处理当前列表页</button>
+      <button id="stop-workday-batch" class="sidebar-button" style="background-color: #f44336; display: none; margin-left: 10px;">停止处理</button>
+      <div style="margin-top: 10px; margin-bottom: 5px;">
+        <label for="workday-apply-interval" style="display: block; margin-bottom: 3px; font-size: 14px;">处理间隔(秒):</label>
+        <input type="number" id="workday-apply-interval" min="1" max="30" value="2" style="width: 60px; padding: 3px; font-size: 14px;">
+      </div>
+      <div id="workday-batch-status" style="margin-top: 10px; font-size: 14px;"></div>
+    </div>
+
     <div class="sidebar-section" id="batch-apply-settings" style="display: none;">
-      <h3>批量投递设置</h3>
+      <h3>批量投递设置 (LinkedIn)</h3>
       <div style="margin-bottom: 10px;">
         <label style="display: block; margin-bottom: 5px;">间隔时间(秒):</label>
         <input type="number" id="apply-interval" min="2" max="30" value="5" style="width: 100%; padding: 5px;">
@@ -142,7 +153,7 @@ function createAndInjectSidebar() {
       <button id="stop-batch-apply" class="sidebar-button" style="background-color: #f44336; display: none; margin-left: 10px;">停止投递</button>
       <div id="batch-status" style="margin-top: 10px; font-size: 14px;"></div>
     </div>
-    
+
     <div class="sidebar-section">
       <h3>帮助</h3>
       <p style="font-size: 13px; color: #666;">
@@ -179,7 +190,12 @@ function createAndInjectSidebar() {
     toggleButton,
     statusMessage: document.getElementById('status-message'),
     resumeFileInput: document.getElementById('resume-file'),
-    fillFormButton: document.getElementById('fill-form-button')
+    fillFormButton: document.getElementById('fill-form-button'),
+    batchApplyButton: document.getElementById('batch-apply-button'), // LinkedIn toggle
+    startWorkdayBatchButton: document.getElementById('start-workday-batch'), // New Workday Start
+    stopWorkdayBatchButton: document.getElementById('stop-workday-batch'),   // New Workday Stop
+    workdayBatchStatusDiv: document.getElementById('workday-batch-status'), // New Workday Status
+    workdayApplyIntervalInput: document.getElementById('workday-apply-interval') // New Workday Interval Input
   };
 }
 
@@ -195,11 +211,11 @@ function setupFileUpload(resumeFileInput, statusMessage) {
     }
 
     statusMessage.textContent = `正在处理 ${file.name}...`;
-    
+
     try {
       // 直接读取文件为 ArrayBuffer
       const fileData = await readFileAsArrayBuffer(file);
-      
+
       // 保存最后上传的简历信息到storage
       chrome.storage.local.set({
         'lastUploadedResume': {
@@ -209,11 +225,11 @@ function setupFileUpload(resumeFileInput, statusMessage) {
           uploadTime: new Date().toISOString()
         }
       });
-      
+
       // 发送文件数据到 background script 进行处理
       statusMessage.textContent = '正在上传文件并请求 AI 分析...';
-      chrome.runtime.sendMessage({ 
-        type: 'PROCESS_RESUME_FILE', 
+      chrome.runtime.sendMessage({
+        type: 'PROCESS_RESUME_FILE',
         payload: {
           fileName: file.name,
           fileData: fileData
@@ -230,7 +246,7 @@ function setupFileUpload(resumeFileInput, statusMessage) {
           console.error("File processing failed:", response?.error);
         }
       });
-      
+
     } catch (error) {
       statusMessage.textContent = `读取文件时出错: ${error.message}`;
       console.error("Error reading file:", error);
@@ -355,20 +371,20 @@ function fillFormField(fieldId, value) {
 function setupFormFilling(fillFormButton, statusMessage) {
   fillFormButton.addEventListener('click', async () => {
     statusMessage.textContent = '正在分析页面表单...';
-    
+
     // 清理之前可能存在的标记
     document.querySelectorAll('[data-autofill-id]').forEach(el => el.removeAttribute('data-autofill-id'));
-    
+
     // 查找表单字段
     const fields = getVisibleFormFields();
-    
+
     if (fields.length === 0) {
       statusMessage.textContent = '未在页面上找到可填充的表单字段。';
       return;
     }
-    
+
     statusMessage.textContent = `找到 ${fields.length} 个表单字段，正在请求匹配...`;
-    
+
     // 从存储中获取解析后的简历数据
     chrome.storage.local.get(['resumeData'], (result) => {
       if (chrome.runtime.lastError) {
@@ -376,12 +392,12 @@ function setupFormFilling(fillFormButton, statusMessage) {
         console.error(chrome.runtime.lastError);
         return;
       }
-      
+
       if (!result.resumeData) {
         statusMessage.textContent = '未找到解析后的简历数据，请先上传并等待解析完成。';
         return;
       }
-      
+
       // 将表单字段和简历数据发送到 background script 请求 OpenAI 匹配
       chrome.runtime.sendMessage({
         type: 'MATCH_FIELDS_WITH_RESUME',
@@ -396,11 +412,11 @@ function setupFormFilling(fillFormButton, statusMessage) {
         } else if (matchResponse && matchResponse.success && matchResponse.payload) {
           const fieldMapping = matchResponse.payload;
           statusMessage.textContent = '匹配成功，正在填充表单...';
-          
+
           // 应用匹配结果填充表单
           let filledCount = 0;
           let failedCount = 0;
-          
+
           for (const fieldId in fieldMapping) {
             if (Object.hasOwnProperty.call(fieldMapping, fieldId)) {
               const value = fieldMapping[fieldId];
@@ -411,10 +427,10 @@ function setupFormFilling(fillFormButton, statusMessage) {
               }
             }
           }
-          
+
           // 清理临时属性
           document.querySelectorAll('[data-autofill-id]').forEach(el => el.removeAttribute('data-autofill-id'));
-          
+
           if (filledCount > 0) {
             statusMessage.textContent = `已填充 ${filledCount} 个字段。${failedCount > 0 ? `有 ${failedCount} 个字段填充失败。`: ''}`;
           } else {
@@ -433,7 +449,7 @@ function setupFormFilling(fillFormButton, statusMessage) {
 // 添加MutationObserver来监视DOM变化，以便在右侧详情页加载后能够及时发现按钮
 function setupDOMChangeObserver() {
   console.log("启动DOM变化观察器...");
-  
+
   // 创建观察器实例
   const observer = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
@@ -441,24 +457,24 @@ function setupDOMChangeObserver() {
       if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
         // 检查是否添加了包含申请按钮的节点
         const rightPanel = document.querySelector('.job-detail-panel, .job-description-panel');
-        
+
         if (rightPanel) {
           const applyButton = rightPanel.querySelector('button:not([data-quick-apply-monitored]), a:not([data-quick-apply-monitored])');
-          
+
           if (applyButton) {
             const buttonText = applyButton.textContent?.trim().toLowerCase() || '';
-            
+
             // 检查是否是申请按钮
-            if (buttonText.includes('快速申请') || 
-                buttonText.includes('立即申请') || 
-                buttonText.includes('申请职位') || 
+            if (buttonText.includes('快速申请') ||
+                buttonText.includes('立即申请') ||
+                buttonText.includes('申请职位') ||
                 buttonText.includes('投递简历') ||
                 buttonText.includes('申请') && buttonText.length < 10) {
-              
+
               console.log("DOM变化检测到申请按钮:", applyButton);
               applyButton.setAttribute('data-quick-apply-monitored', 'true');
               applyButton.addEventListener('click', handleRightApplyButtonClick);
-              
+
               // 如果之前点击了左侧按钮，自动点击右侧按钮
               chrome.storage.local.get(['leftQuickApplyClicked', 'resumeData'], (result) => {
                 if (result.leftQuickApplyClicked && result.resumeData) {
@@ -477,16 +493,16 @@ function setupDOMChangeObserver() {
       }
     });
   });
-  
+
   // 配置观察选项
-  const config = { 
-    childList: true, 
-    subtree: true 
+  const config = {
+    childList: true,
+    subtree: true
   };
-  
+
   // 开始观察整个文档
   observer.observe(document.body, config);
-  
+
   // 5分钟后断开观察器，避免长时间消耗资源
   setTimeout(() => {
     observer.disconnect();
@@ -497,10 +513,10 @@ function setupDOMChangeObserver() {
 // 检测并处理求职网站上的快速申请按钮
 function setupJobsQuickApplyHandlers() {
   console.log("设置求职网站快速申请按钮处理器...");
-  
+
   // 启动DOM变化观察器
   setupDOMChangeObserver();
-  
+
   // 检测图片中所示网站的特定结构
   function checkSpecificWebsiteStructure() {
     try {
@@ -509,20 +525,20 @@ function setupJobsQuickApplyHandlers() {
       if (linkedInApplyButton && !linkedInApplyButton.hasAttribute('data-quick-apply-monitored')) {
         console.log("找到LinkedIn申请按钮(ID匹配):", linkedInApplyButton);
         linkedInApplyButton.setAttribute('data-quick-apply-monitored', 'true');
-        
+
         // 不自动点击，只添加监听器以捕获用户点击
         linkedInApplyButton.addEventListener('click', handleRightApplyButtonClick);
       }
-      
+
       // 检查左侧职位列表中的快速申请按钮
       document.querySelectorAll('button, a').forEach(el => {
         if (el.hasAttribute('data-quick-apply-monitored')) return;
-        
+
         const text = el.textContent?.trim() || '';
         const buttonId = el.id?.toLowerCase() || '';
-        
-        if (text === '快速申请' || 
-            text.toLowerCase() === 'easy apply' || 
+
+        if (text === '快速申请' ||
+            text.toLowerCase() === 'easy apply' ||
             text.toLowerCase() === 'apply now' ||
             text === 'Go' || // 添加对"Go"文本的支持
             buttonId.includes('jobs-apply-button')) { // 直接匹配ID
@@ -535,22 +551,22 @@ function setupJobsQuickApplyHandlers() {
       console.log("检查特定网站结构时出错:", error);
     }
   }
-  
+
   // 立即检查一次特定网站结构
   checkSpecificWebsiteStructure();
-  
+
   // 定期检查页面上的快速申请按钮
   const checkInterval = setInterval(() => {
     // 再次检查特定网站结构
     checkSpecificWebsiteStructure();
-    
+
     // 检查左侧快速申请按钮 - 扩大搜索范围
     const leftQuickApplyButtons = document.querySelectorAll('button:not([data-quick-apply-monitored]), a:not([data-quick-apply-monitored])');
-    
+
     leftQuickApplyButtons.forEach(button => {
       // 标记按钮已被监控
       button.setAttribute('data-quick-apply-monitored', 'true');
-      
+
       // 检查按钮文本是否包含"快速申请"或其他常见文本
       const buttonText = button.textContent?.trim().toLowerCase() || '';
       const buttonClass = button.className?.toLowerCase() || '';
@@ -2729,15 +2745,475 @@ function initialize() {
   window.resumeUploadNoticeDisplayed = false;
   window.currentResumeNoticeElement = null;
   
-  const { sidebar, statusMessage, resumeFileInput, fillFormButton } = createAndInjectSidebar();
+  const { sidebar, statusMessage, resumeFileInput, fillFormButton, batchApplyButton, startWorkdayBatchButton, stopWorkdayBatchButton, workdayBatchStatusDiv, workdayApplyIntervalInput } = createAndInjectSidebar(); // Added Workday refs
   setupFileUpload(resumeFileInput, statusMessage);
   setupFormFilling(fillFormButton, statusMessage);
-  setupBatchApplyFeature();
+  setupBatchApplyFeature(); // Sets up LinkedIn batch feature
   
+  // --- Workday Button Logic ---
+  let isWorkdayBatchApplying = false; // Global state for Workday batch process
+
+  // Function to update Workday button states and status
+  function updateWorkdayUI(isProcessing, message = "") {
+    const startBtn = startWorkdayBatchButton; // Use reference from createAndInjectSidebar
+    const stopBtn = stopWorkdayBatchButton;
+    const statusDiv = workdayBatchStatusDiv;
+    const linkedInToggleBtn = batchApplyButton; // LinkedIn Batch Toggle
+
+    if (startBtn && stopBtn && statusDiv) {
+        if (isProcessing) {
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            startBtn.disabled = true; // Also disable logically
+            if(linkedInToggleBtn) linkedInToggleBtn.disabled = true; // Disable LinkedIn btn during Workday run
+        } else {
+            startBtn.style.display = 'inline-block';
+            stopBtn.style.display = 'none';
+             // Only re-enable start button if on a workday page
+            startBtn.disabled = !window.location.href.includes('.myworkdayjobs.com'); 
+            if(linkedInToggleBtn) linkedInToggleBtn.disabled = false; // Re-enable LinkedIn btn
+        }
+        statusDiv.textContent = message;
+    } else {
+         console.error("[Workday UI] Could not find all Workday UI elements for update (using refs).");
+    }
+  }
+
+  // Main function to initiate the Workday batch process
+  async function startWorkdayApplicationProcess() { 
+    if (isWorkdayBatchApplying) { // Prevent starting again if already running
+        console.warn("[Workday] Batch process already running.");
+        return;
+    }
+    isWorkdayBatchApplying = true;
+    updateWorkdayUI(true, "开始批量处理 Workday 列表...");
+    console.log("[Workday] Starting Workday BATCH application process..."); 
+
+    // Define selectors at the top level of the function
+    const leftJobLinkSelector = 'ul[role="list"] li a[data-automation-id="jobTitle"]'; 
+    const nextPageSelector = 'button[data-uxi-element-id="next"][aria-label="next"]'; // Corrected selector based on user provided HTML
+
+    let totalProcessedCount = 0;
+    let totalErrorCount = 0;
+    let totalSkippedCount = 0;
+    let currentPage = 1;
+
+    // --- Outer loop for pagination ---
+    while (isWorkdayBatchApplying) {
+      console.log(`\n--- [Workday] Processing Page ${currentPage} ---`);
+      updateWorkdayUI(true, `开始处理第 ${currentPage} 页...`);
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Short pause before processing page
+
+      // *** CHECK STOP FLAG before processing page ***
+      if (!isWorkdayBatchApplying) {
+          console.log("[Workday] Stop requested before processing page", currentPage);
+          break; 
+      }
+
+      // --- Find all visible job links on the *current* page ---
+      const allJobLinks = document.querySelectorAll(leftJobLinkSelector);
+      // Filter for *currently* visible links on *this* page
+      const visibleJobLinks = Array.from(allJobLinks).filter(link => link.offsetParent !== null);
+
+      if (visibleJobLinks.length === 0 && currentPage === 1) { // Only error out if no links on first page
+        updateWorkdayUI(false, "未找到可见的左侧职位链接 (第一页)。");
+        console.warn("[Workday] Could not find any visible job links on the left (Page 1) using selector:", leftJobLinkSelector);
+        alert("无法在第一页找到左侧的职位链接。");
+        isWorkdayBatchApplying = false; // Reset state
+        break; // Stop if no links found on page 1
+      } else if (visibleJobLinks.length === 0 && currentPage > 1) {
+         console.log(`[Workday] No more visible job links found on page ${currentPage}. Assuming end of list.`);
+         updateWorkdayUI(true, `第 ${currentPage} 页未找到新职位。 检查下一页...`);
+         // Proceed to check for next page button directly
+      } else {
+          console.log(`[Workday] Found ${visibleJobLinks.length} visible job links on page ${currentPage}.`);
+          updateWorkdayUI(true, `第 ${currentPage} 页找到 ${visibleJobLinks.length} 个职位，开始处理...`);
+          await new Promise(resolve => setTimeout(resolve, 1000)); 
+
+          // --- Inner loop: Iterate through each visible job link on the current page ---
+          for (let i = 0; i < visibleJobLinks.length; i++) {
+              // *** CHECK STOP FLAG inside inner loop ***
+              if (!isWorkdayBatchApplying) {
+                  console.log("[Workday] Stop requested during inner loop on page", currentPage);
+                  break; // Exit the inner loop
+              }
+
+              const jobLink = visibleJobLinks[i];
+              const currentJobIndex = i + 1;
+              const jobTitleText = jobLink.textContent.length > 40 ? jobLink.textContent.substring(0, 37) + '...' : jobLink.textContent;
+
+              console.log(`\n--- [Workday][Page ${currentPage}] Processing Job ${currentJobIndex}/${visibleJobLinks.length}: ${jobLink.textContent} ---`);
+              updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: ${jobTitleText}`);
+
+              const parentLi = jobLink.closest('li');
+              if (parentLi && parentLi.textContent.toLowerCase().includes('applied')) {
+                  console.log("[Workday] Skipping job that appears to be already applied:", jobTitleText);
+                  totalSkippedCount++;
+                  updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 跳过 (已申请?)`);
+                  await new Promise(resolve => setTimeout(resolve, 500)); 
+                  continue; 
+              }
+
+              try {
+                  // --- Step 1: Click the left job link ---
+                  console.log("[Workday] Clicking left job link...");
+                  jobLink.click();
+                  updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 等待右侧...`);
+                  // *** CHECK STOP FLAG ***
+                  if (!isWorkdayBatchApplying) break;
+                  await new Promise(resolve => setTimeout(resolve, 2500)); 
+                  // *** CHECK STOP FLAG ***
+                  if (!isWorkdayBatchApplying) break;
+
+                  // --- Step 2: Find and Click the Apply button on the right ---
+                  updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 查找 Apply...`);
+                  const applyButtonSelectors = [
+                    'a[data-automation-id="adventureButton"]',   
+                    'button[data-automation-id="adventureButton"]',
+                    'button[data-automation-id="applyButton"]',
+                    'a[data-automation-id="applyButton"]',
+                    'button[aria-label*="Apply" i]',
+                    'a[role="button"][aria-label*="Apply" i]',
+                    '.wd-primary-button[data-automation-id*="apply"]'
+                  ];
+                  let applyButton = null;
+                  await new Promise(resolve => setTimeout(resolve, 500)); 
+                  // *** CHECK STOP FLAG ***
+                  if (!isWorkdayBatchApplying) break;
+                  for (const selector of applyButtonSelectors) {
+                      const button = document.querySelector(selector);
+                      // Ensure button is visible on the screen
+                      if (button && button.offsetParent !== null) { 
+                          applyButton = button;
+                          console.log(`[Workday] Found Apply button using selector: ${selector}`);
+                          break;
+                      }
+                  }
+
+                  if (applyButton) {
+                      // --- Start Replacement ---
+                      updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 点击 Apply...`);
+                      console.log("[Workday] Clicking the Apply button:", applyButton);
+                      applyButton.click();
+
+                      // *** NEW LOGIC: Handle 'Use My Last Application' Modal ***
+                      console.log("[Workday] Waiting for 'Start Your Application' modal...");
+                      updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 等待选项...`);
+
+                      const useLastAppSelector = 'a[data-automation-id="useMyLastApplication"]';
+                      const modalCloseSelector = 'button[data-automation-id="closeButton"]';
+                      let useLastAppButton = null;
+                      const waitStartTime = Date.now();
+                      const waitTimeout = 10000; // 10 seconds timeout
+                      let foundUseLastApp = false;
+
+                      while (Date.now() - waitStartTime < waitTimeout) {
+                           // *** CHECK STOP FLAG while waiting for modal ***
+                           if (!isWorkdayBatchApplying) {
+                               console.log("[Workday] Stop requested while waiting for 'Use My Last' modal.");
+                               break; // Exit wait loop
+                           }
+                           useLastAppButton = document.querySelector(useLastAppSelector);
+                           // Check if the button is found and visible
+                           if (useLastAppButton && useLastAppButton.offsetParent !== null) { 
+                               console.log("[Workday] Found 'Use My Last Application' button.");
+                               foundUseLastApp = true;
+                               break; // Exit wait loop
+                           }
+                           await new Promise(resolve => setTimeout(resolve, 500)); // Check every 0.5 seconds
+                      }
+
+                      // *** CHECK STOP FLAG again after waiting ***
+                      if (!isWorkdayBatchApplying) break; // Exit job processing if stopped
+
+                      if (foundUseLastApp && useLastAppButton) {
+                          const applicationUrl = useLastAppButton.href;
+                          if (!applicationUrl) {
+                                console.warn("[Workday] 'Use My Last Application' button found but href is missing!");
+                                totalErrorCount++;
+                                jobLink.style.outline = '2px dashed orange'; // Mark different error
+                          } else {
+                              // --- Start Replacement for message sending and waiting logic ---
+                              console.log(`[Workday] Extracted application URL: ${applicationUrl}`);
+                              updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 打开新标签页...`);
+
+                              let newTabId = null;
+                              try {
+                                  // 使用 Promise 包装 sendMessage 以便 await
+                                  const response = await new Promise((resolve, reject) => {
+                                      chrome.runtime.sendMessage({ type: 'OPEN_URL_NEW_TAB', url: applicationUrl }, (response) => {
+                                          if (chrome.runtime.lastError) {
+                                              reject(new Error(chrome.runtime.lastError.message));
+                                          } else if (response && response.success && response.tabId) {
+                                              resolve(response);
+                                          } else {
+                                              reject(new Error(response?.error || "Failed to get tabId from background."));
+                                          }
+                                      });
+                                  });
+                                  
+                                  newTabId = response.tabId;
+                                  console.log(`[Workday] Background confirmed new tab opened with ID: ${newTabId}`);
+
+                              } catch (error) {
+                                  console.error("[Workday] Error opening new tab via background:", error.message);
+                                  totalErrorCount++; // Count as error if tab fails to open
+                                  jobLink.style.outline = '2px dashed red'; 
+                                  continue; // Skip rest of processing for this job if tab opening fails
+                              }
+                              
+                              // *** CHECK STOP FLAG *** (Important after await)
+                              if (!isWorkdayBatchApplying) break; 
+
+                              // --- Start Replacement: Wait for background signal --- 
+                              console.log(`[Workday] Waiting for background signal (NEW_TAB_PROCESS_COMPLETE) for tab ID: ${newTabId}...`);
+                              updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 等待后台处理...`);
+
+                              try {
+                                  await new Promise((resolve, reject) => { // Keep reject for potential future use, but remove timeout logic
+                                      resolveNewTabPromise = resolve; // Store the resolver globally
+                                      
+                                  });
+                                  console.log("[Workday] Promise resolved. Proceeding after background signal."); // Updated log message
+                              } catch(e) { 
+                                   console.error("[Workday] Error awaiting promise:", e);
+                                   totalErrorCount++; 
+                                   jobLink.style.outline = '2px dashed purple'; // Mark error
+                                   continue; // Skip closing modal if promise rejected
+                              } finally {
+                                   resolveNewTabPromise = null; // Clean up resolver in all cases
+                              }
+                              // --- End Replacement --- 
+                                  
+                              // *** CHECK STOP FLAG again after waiting for signal ***
+                              if (!isWorkdayBatchApplying) break; 
+
+                              // Now close the modal on the original page (This logic runs AFTER the promise resolves/rejects)
+                              // Important: Check if we continued due to an error above before closing modal
+                              if (jobLink.style.outline !== '2px dashed purple') { // Only close if no timeout error
+                                console.log("[Workday] Attempting to close the 'Start Your Application' modal...");
+                                const closeButton = document.querySelector(modalCloseSelector);
+                                if (closeButton && closeButton.offsetParent !== null) {
+                                    closeButton.click();
+                                    console.log("[Workday] Clicked modal close button.");
+                                    await new Promise(resolve => setTimeout(resolve, 500)); // Short pause after closing
+                                } else {
+                                    console.warn("[Workday] Could not find or click the modal close button after background signal.");
+                                }
+                              }
+
+                              // Only count success if the promise didn't reject and href existed
+                              if (jobLink.style.outline !== '2px dashed purple' && jobLink.style.outline !== '2px dashed orange') {
+                                console.log("[Workday] 'Use My Last Application' step processed successfully.");
+                                totalProcessedCount++; 
+                                jobLink.style.opacity = '0.5'; 
+                              }
+                          }
+
+                      } else {
+                          // 'Use My Last Application' button not found within timeout
+                          updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 未找到'Use Last App'`);
+                          console.warn("[Workday] Could not find 'Use My Last Application' button within timeout for job:", jobTitleText);
+                          totalErrorCount++;
+                          jobLink.style.outline = '2px dashed orange'; // Different color/style for this specific error
+                      }
+                      // --- End Replacement ---
+                  } else {
+                      updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 未找到 Apply`);
+                      console.warn("[Workday] Could not find the main 'Apply' button after clicking left link for job:", jobTitleText);
+                      totalErrorCount++;
+                      jobLink.style.outline = '2px dashed red'; 
+                  }
+
+              } catch (error) {
+                  updateWorkdayUI(true, `第 ${currentPage} 页: 职位 ${currentJobIndex} 出错`);
+                  console.error(`[Workday][Page ${currentPage}] Error processing job ${currentJobIndex} (${jobTitleText}):`, error);
+                  totalErrorCount++;
+                  jobLink.style.outline = '2px dashed red'; 
+                  await new Promise(resolve => setTimeout(resolve, 1000)); 
+              }
+              
+              // Delay before processing the next job
+              // *** CHECK STOP FLAG ***
+              if (!isWorkdayBatchApplying) break;
+              // Read interval from input, with fallback
+              const intervalInput = document.getElementById('workday-apply-interval');
+              let intervalSec = intervalInput ? parseInt(intervalInput.value, 10) : 2; 
+              if (isNaN(intervalSec) || intervalSec < 1) intervalSec = 1; // Minimum 1 second
+              if (intervalSec > 30) intervalSec = 30; // Maximum 30 seconds
+
+              console.log(`[Workday] Waiting ${intervalSec} seconds before next job...`);
+              updateWorkdayUI(true, `第 ${currentPage} 页: 处理中 ${currentJobIndex}/${visibleJobLinks.length}: 等待 ${intervalSec}s`);
+              await new Promise(resolve => setTimeout(resolve, intervalSec * 1000)); 
+
+          } // End of inner loop (jobs on current page)
+      } // End of else (if visible links were found on current page)
+
+      // *** CHECK STOP FLAG after processing page jobs ***
+      if (!isWorkdayBatchApplying) {
+          console.log("[Workday] Stop requested after processing jobs on page", currentPage);
+          break; // Exit the outer loop
+      }
+
+      // --- Attempt to navigate to the next page ---
+      console.log(`[Workday] Finished processing page ${currentPage}. Looking for next page button...`);
+      updateWorkdayUI(true, `第 ${currentPage} 页处理完毕，查找下一页按钮...`);
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Pause before finding next button
+
+      const nextPageButton = document.querySelector(nextPageSelector);
+
+      if (nextPageButton && !nextPageButton.disabled && nextPageButton.offsetParent !== null) {
+          console.log("[Workday] Found active next page button. Clicking...");
+          updateWorkdayUI(true, `找到下一页按钮，正在加载第 ${currentPage + 1} 页...`);
+          nextPageButton.click();
+          currentPage++;
+          // Wait longer for the next page to load
+          const pageLoadWaitSec = 4;
+          console.log(`[Workday] Waiting ${pageLoadWaitSec} seconds for page ${currentPage} to load...`);
+          // *** CHECK STOP FLAG while waiting for next page ***
+          let waitCounter = 0;
+          while (waitCounter < pageLoadWaitSec * 1000 && isWorkdayBatchApplying) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              waitCounter += 500;
+              updateWorkdayUI(true, `正在加载第 ${currentPage} 页... (${Math.ceil((pageLoadWaitSec * 1000 - waitCounter)/1000)}s)`);
+          }
+          if (!isWorkdayBatchApplying) {
+              console.log("[Workday] Stop requested while waiting for page", currentPage);
+              break; // Exit outer loop
+          }
+          console.log(`[Workday] Page ${currentPage} should be loaded.`);
+      } else {
+          if (!nextPageButton) {
+              console.log("[Workday] Next page button not found. Assuming end of results.");
+          } else if (nextPageButton.disabled) {
+              console.log("[Workday] Next page button found but is disabled. Assuming end of results.");
+          } else if (nextPageButton.offsetParent === null) {
+               console.log("[Workday] Next page button found but is not visible. Assuming end of results.");
+          }
+          updateWorkdayUI(true, "未找到可用的下一页按钮。 结束处理。");
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          break; // Exit the outer loop
+      }
+
+    } // End of outer loop (pagination)
+
+    // --- Batch Process Finished or Stopped ---
+    const finalMessage = isWorkdayBatchApplying ? 
+        `Workday 批量处理完成 (${currentPage} 页)！点击 Apply: ${totalProcessedCount}，失败: ${totalErrorCount}，跳过: ${totalSkippedCount}。` :
+        `Workday 批量处理已停止 (在第 ${currentPage} 页)。`;
+    const alertMessage = isWorkdayBatchApplying ?
+         `Workday 批量处理（点击 Apply）完成！\n处理页数: ${currentPage}\n成功: ${totalProcessedCount}\n失败: ${totalErrorCount}\n跳过: ${totalSkippedCount}\n\n注意：实际表单填写尚未实现。`:
+         `Workday 批量处理已手动停止 (在第 ${currentPage} 页)。\n完成点击 Apply: ${totalProcessedCount}\n失败: ${totalErrorCount}\n跳过: ${totalSkippedCount}`; 
+
+    console.log(`[Workday] Batch process finished/stopped on page ${currentPage}. Clicked Apply: ${totalProcessedCount}, Errors: ${totalErrorCount}, Skipped: ${totalSkippedCount}, Stopped: ${!isWorkdayBatchApplying}`);
+    isWorkdayBatchApplying = false; // Ensure state is reset
+    updateWorkdayUI(false, finalMessage);
+    alert(alertMessage);
+    
+    // Optionally reset visual markers from the last processed page (or all if needed)
+    document.querySelectorAll(leftJobLinkSelector).forEach(link => {
+        link.style.opacity = '';
+        link.style.outline = '';
+    });
+
+  }
+
+  // Event Listeners for new Workday buttons
+  // Get references from the object returned by createAndInjectSidebar
+  if (startWorkdayBatchButton) {
+      startWorkdayBatchButton.addEventListener('click', startWorkdayApplicationProcess);
+  } else {
+      console.error("Workday START button reference not found during initialization.");
+  }
+
+  if (stopWorkdayBatchButton) {
+      stopWorkdayBatchButton.addEventListener('click', () => {
+          if (isWorkdayBatchApplying) {
+              console.log("[Workday] Stop button clicked. Setting stop flag.");
+              isWorkdayBatchApplying = false; 
+              updateWorkdayUI(false, "正在停止处理..."); 
+          } else {
+              console.warn("[Workday] Stop button clicked but process not running.");
+          }
+      });
+  } else {
+      console.error("Workday STOP button reference not found during initialization.");
+  }
+ 
+
+  
+  // 初始检查
+  checkAndEnableWorkdayButton();
+  
+  // --- End Workday Button Logic ---
+
   // 添加页面导航和模态框变化监听器
   setupModalAndNavigationObserver();
   
   console.log("Resume auto-fill sidebar initialized.");
+
+  // --- Message Listener Setup ---
+  // Ensure there's a listener setup, potentially combining with existing ones
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      console.log("[Content Script] Received message:", message.type);
+      
+      if (message.type === 'UPDATE_STATUS') {
+          const statusDiv = document.getElementById('status-message') || document.getElementById('workday-batch-status');
+          if (statusDiv) { statusDiv.textContent = message.payload; }
+          sendResponse({ success: true });
+      } 
+      // --- NEW: Handler for completion signal from background ---
+      else if (message.type === 'NEW_TAB_PROCESS_COMPLETE') {
+          console.log("[Content Script] Received NEW_TAB_PROCESS_COMPLETE signal.");
+          if (typeof resolveNewTabPromise === 'function') {
+              console.log("[Content Script] Resolving the wait promise for new tab completion.");
+              resolveNewTabPromise(); // Resolve the promise to continue execution
+              resolveNewTabPromise = null; // Reset for next use
+              sendResponse({ success: true }); // Acknowledge receipt
+          } else {
+               console.warn("[Content Script] Received completion signal, but no promise resolver was waiting.");
+               sendResponse({ success: false, error: "No promise waiting." });
+          }
+          return true; // Indicate async response for this handler
+      }
+      // --- End of NEW handler ---
+      
+      // If not handling message or not async, return false or nothing
+      // return false; 
+  });
+  // --- End Message Listener Setup ---
+}
+
+  // 检查当前是否为 Workday 页面并启用按钮
+  function checkAndEnableWorkdayButton() {
+    const startBtn = document.getElementById('start-workday-batch');
+    const workdaySection = document.getElementById('workday-controls');
+    const stopBtn = document.getElementById('stop-workday-batch');
+    
+    // Ensure global state variable is accessible if needed, or pass as argument
+    // Depending on exact JS scoping, might need adjustment if isWorkdayBatchApplying isn't global enough
+    const isProcessing = typeof isWorkdayBatchApplying !== 'undefined' ? isWorkdayBatchApplying : false; 
+
+    const onWorkdayPage = window.location.href.includes('.myworkdayjobs.com');
+
+    if (workdaySection) {
+        workdaySection.style.display = onWorkdayPage ? 'block' : 'none';
+    }
+
+    if (startBtn) {
+        // Disable if not on Workday OR if already processing
+        startBtn.disabled = !onWorkdayPage || isProcessing; 
+        startBtn.title = onWorkdayPage ? "开始批量处理当前页 Workday 职位" : "此功能仅在 Workday 招聘网站可用";
+    }
+
+    // Ensure stop button is hidden if not on Workday page OR if process isn't running
+    if (stopBtn && (!onWorkdayPage || !isProcessing)) {
+        stopBtn.style.display = 'none';
+    }
+    // Ensure start button is shown if not processing
+     if (startBtn && !isProcessing) {
+        startBtn.style.display = 'inline-block';
+    }
 }
 
 // 监听模态框变化和页面导航
@@ -2748,8 +3224,10 @@ function setupModalAndNavigationObserver() {
     const url = location.href;
     if (url !== lastUrl) {
       lastUrl = url;
-      console.log('URL changed, cleaning up any notices');
+      console.log('URL changed, cleaning up any notices and checking Workday button status');
+            // --- DEBUGGING: Check function availability before calling ---
       cleanupResumeUploadNotice();
+      checkAndEnableWorkdayButton(); // URL 变化时重新检查 Workday 按钮状态
     }
   }).observe(document, {subtree: true, childList: true});
   

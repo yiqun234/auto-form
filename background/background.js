@@ -346,6 +346,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true; // 异步响应
   }
+
+  // --- Handler for opening URL in a new tab --- 
+  if (message.type === 'OPEN_URL_NEW_TAB') {
+    if (message.url && typeof message.url === 'string' && message.url.startsWith('http')) {
+      chrome.tabs.create({ url: message.url, active: true }, (tab) => {
+        if (chrome.runtime.lastError) {
+          console.error(`Error opening new tab for URL ${message.url}:`, chrome.runtime.lastError.message);
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          // --- Start Replacement --- 
+          const newTabId = tab.id;
+          // Get the original tab ID that sent the message
+          const originalTabId = sender.tab?.id; 
+
+          console.log(`Successfully opened new tab (ID: ${newTabId}) for URL: ${message.url}. Will simulate processing and close in 5s.`);
+          // Respond immediately to content script confirming tab creation and providing ID
+          sendResponse({ success: true, tabId: newTabId }); 
+
+          if (originalTabId) {
+              // Start simulation timer
+              setTimeout(() => {
+                  console.log(`[Simulate] Closing tab ${newTabId} after 5s timeout.`);
+                  // Attempt to close the new tab
+                  chrome.tabs.remove(newTabId, () => {
+                      if (chrome.runtime.lastError) {
+                          console.warn(`[Simulate] Error closing tab ${newTabId} (might have been closed already): ${chrome.runtime.lastError.message}`);
+                      } else {
+                          console.log(`[Simulate] Successfully closed tab ${newTabId}.`);
+                      }
+                      
+                      // Regardless of close success/failure, notify the original tab
+                      console.log(`[Simulate] Sending NEW_TAB_PROCESS_COMPLETE to original tab ${originalTabId}.`);
+                      chrome.tabs.sendMessage(originalTabId, { type: 'NEW_TAB_PROCESS_COMPLETE', originalSenderTabId: originalTabId /* Optional: send back original ID for confirmation */ }, (response) => {
+                           if (chrome.runtime.lastError) {
+                               // Content script might have navigated away or been closed
+                               console.warn(`[Simulate] Error sending completion message to tab ${originalTabId}: ${chrome.runtime.lastError.message}`);
+                           } else {
+                               console.log(`[Simulate] Completion message acknowledged by tab ${originalTabId}.`, response);
+                           }
+                      });
+                  });
+              }, 5000); // 5 second delay
+          } else {
+              console.warn("[Simulate] Could not get original tab ID to send completion message back.");
+          }
+          // --- End Replacement ---
+        }
+      });
+      return true; // Indicates an asynchronous response will be sent
+    } else {
+      console.error("Received OPEN_URL_NEW_TAB message but URL was missing, invalid, or not HTTP(S).");
+      sendResponse({ success: false, error: "Invalid or missing URL in message." });
+    }
+  }
+  // --- End of open tab handler ---
 });
 
 
