@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "智能简历填充助手 (Auto Form Filler)",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "上传简历，使用 OpenAI 智能解析并自动填充网页表单。",
   "permissions": [
     "storage",

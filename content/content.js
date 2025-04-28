@@ -80,21 +80,22 @@ function createAndInjectSidebar() {
     .sidebar-button:hover {
       background: #1976D2;
     }
+    .sidebar-button:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+    }
     #status-message {
       margin: 10px 0;
       font-style: italic;
       font-size: 14px;
     }
-    .file-input-label {
-      display: inline-block;
-      padding: 8px 15px;
-      background: #e0e0e0;
-      border-radius: 4px;
-      cursor: pointer;
-      margin-top: 5px;
-    }
-    #resume-file {
-      display: none;
+    .settings-link {
+        display: block;
+        margin-top: 10px;
+        font-size: 14px;
+        color: #0073b1;
+        cursor: pointer;
+        text-decoration: underline;
     }
   `;
   document.head.appendChild(style);
@@ -108,35 +109,33 @@ function createAndInjectSidebar() {
   const header = document.createElement('div');
   header.id = 'resume-autofill-sidebar-header';
   header.innerHTML = `
-    <h2 style="margin: 0; font-size: 18px;">智能简历填充</h2>
+    <h2 style="margin: 0; font-size: 18px;">智能表单填充</h2>
     <button id="resume-autofill-close" style="background: none; border: none; font-size: 20px; cursor: pointer;">×</button>
   `;
   sidebar.appendChild(header);
 
-  // 创建侧边栏内容
+  // 创建侧边栏内容 - 更新
   const content = document.createElement('div');
   content.id = 'resume-autofill-sidebar-content';
   content.innerHTML = `
     <div class="sidebar-section">
-      <h3>选择简历文件</h3>
-      <p style="font-size: 14px; margin-top: 0;">上传简历并使用 AI 自动填充表单</p>
-      <label class="file-input-label">
-        选择文件 (PDF)
-        <input type="file" id="resume-file" accept=".pdf">
-      </label>
-      <div id="status-message">请先上传简历</div>
+      <h3>设置</h3>
+      <p style="font-size: 14px; margin-top: 0;">请先在选项页面设置 API Key 和提供简历内容。</p>
+      <span id="open-options-link" class="settings-link">打开设置页面</span>
+      <div id="status-message">请先完成设置</div> 
     </div>
 
     <div class="sidebar-section">
-      <button id="fill-form-button" class="sidebar-button">填充当前页面表单</button>
-      <button id="batch-apply-button" class="sidebar-button" style="margin-top: 10px; background-color: #4CAF50;">批量自动投递简历 (LinkedIn)</button>
+      <button id="fill-form-button" class="sidebar-button" disabled>填充当前页面表单</button>
+      <button id="batch-apply-button" class="sidebar-button" style="margin-top: 10px; background-color: #4CAF50;">批量自动投递简历 (LinkedIn)</button> 
     </div>
 
-    <div class="sidebar-section" id="workday-controls" style="border-top: 1px solid #eee; padding-top: 15px;">
-      <h3 style="margin-bottom: 5px;">Workday 批量申请</h3>
+    <div class="sidebar-section" id="workday-controls" style="border-top: 1px solid #eee; padding-top: 15px; display: none;"> 
+      <h3 style="margin-bottom: 5px;">Workday 页面</h3>
       <button id="start-workday-batch" class="sidebar-button" style="background-color: #FF9800;" disabled>开始处理当前列表页</button>
       <button id="stop-workday-batch" class="sidebar-button" style="background-color: #f44336; display: none; margin-left: 10px;">停止处理</button>
-      <div style="margin-top: 10px; margin-bottom: 5px;">
+      <button id="manual-fill-workday" class="sidebar-button" style="background-color: #2196F3; margin-top: 10px;" disabled>手动填充当前表单</button>
+      <div style="margin-top: 10px; margin-bottom: 5px; display: none;"> 
         <label for="workday-apply-interval" style="display: block; margin-bottom: 3px; font-size: 14px;">处理间隔(秒):</label>
         <input type="number" id="workday-apply-interval" min="1" max="30" value="2" style="width: 60px; padding: 3px; font-size: 14px;">
       </div>
@@ -157,9 +156,9 @@ function createAndInjectSidebar() {
     <div class="sidebar-section">
       <h3>帮助</h3>
       <p style="font-size: 13px; color: #666;">
-        上传简历后，AI 将分析其内容并尝试填充页面上的表单字段。<br><br>
-        填充后，您仍可以手动检查和调整填写的内容。<br><br>
-        批量投递功能可自动点击"快速申请"或"Easy Apply"按钮并填充表单。
+        请先在选项页设置 API Key 和粘贴您的简历内容。<br><br>
+        设置完成后，点击"填充当前页面表单"按钮，AI 将分析简历并尝试填充页面上的表单字段。<br><br>
+        填充后，您仍可以手动检查和调整填写的内容。
       </p>
     </div>
   `;
@@ -185,83 +184,27 @@ function createAndInjectSidebar() {
     sidebar.classList.add('hidden');
   });
 
+  // 添加打开选项页面链接逻辑
+  const optionsLink = document.getElementById('open-options-link');
+  if (optionsLink) {
+      optionsLink.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' });
+      });
+  }
+
+  // 更新返回的元素引用，移除 resumeFileInput
   return {
     sidebar,
     toggleButton,
     statusMessage: document.getElementById('status-message'),
-    resumeFileInput: document.getElementById('resume-file'),
     fillFormButton: document.getElementById('fill-form-button'),
-    batchApplyButton: document.getElementById('batch-apply-button'), // LinkedIn toggle
-    startWorkdayBatchButton: document.getElementById('start-workday-batch'), // New Workday Start
-    stopWorkdayBatchButton: document.getElementById('stop-workday-batch'),   // New Workday Stop
-    workdayBatchStatusDiv: document.getElementById('workday-batch-status'), // New Workday Status
-    workdayApplyIntervalInput: document.getElementById('workday-apply-interval') // New Workday Interval Input
+    batchApplyButton: document.getElementById('batch-apply-button'), 
+    startWorkdayBatchButton: document.getElementById('start-workday-batch'),
+    stopWorkdayBatchButton: document.getElementById('stop-workday-batch'),
+    manualFillWorkdayButton: document.getElementById('manual-fill-workday'),
+    workdayBatchStatusDiv: document.getElementById('workday-batch-status'),
+    workdayApplyIntervalInput: document.getElementById('workday-apply-interval')
   };
-}
-
-// --- 简历文件处理 ---
-
-// 处理文件上传，直接发送文件 ArrayBuffer 到后台
-function setupFileUpload(resumeFileInput, statusMessage) {
-  resumeFileInput.addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) {
-      statusMessage.textContent = '未选择文件。';
-      return;
-    }
-
-    statusMessage.textContent = `正在处理 ${file.name}...`;
-
-    try {
-      // 直接读取文件为 ArrayBuffer
-      const fileData = await readFileAsArrayBuffer(file);
-
-      // 保存最后上传的简历信息到storage
-      chrome.storage.local.set({
-        'lastUploadedResume': {
-          fileName: file.name,
-          fileSize: file.size,
-          fileType: file.type,
-          uploadTime: new Date().toISOString()
-        }
-      });
-
-      // 发送文件数据到 background script 进行处理
-      statusMessage.textContent = '正在上传文件并请求 AI 分析...';
-      chrome.runtime.sendMessage({
-        type: 'PROCESS_RESUME_FILE',
-        payload: {
-          fileName: file.name,
-          fileData: fileData
-        }
-      }, (response) => {
-        if (chrome.runtime.lastError) {
-          statusMessage.textContent = `处理请求出错: ${chrome.runtime.lastError.message}`;
-          console.error(chrome.runtime.lastError);
-        } else if (response && response.success) {
-          statusMessage.textContent = '简历处理成功！可以填充表单。'; // 更新消息
-          console.log("Resume processed successfully!");
-        } else {
-          statusMessage.textContent = `处理失败: ${response?.error || '未知错误'}`;
-          console.error("File processing failed:", response?.error);
-        }
-      });
-
-    } catch (error) {
-      statusMessage.textContent = `读取文件时出错: ${error.message}`;
-      console.error("Error reading file:", error);
-    }
-  });
-}
-
-// 辅助函数：读取文件为 ArrayBuffer
-function readFileAsArrayBuffer(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result);
-    reader.onerror = () => reject(new Error('读取文件失败'));
-    reader.readAsArrayBuffer(file);
-  });
 }
 
 // --- 表单字段识别 ---
@@ -368,79 +311,115 @@ function fillFormField(fieldId, value) {
 
 // --- 表单填充按钮操作 ---
 
+// 更新表单填充功能的设置
 function setupFormFilling(fillFormButton, statusMessage) {
+  if (!fillFormButton) return;
+  
+  // 检查API Key和简历数据是否已设置
+  checkResumeAndApiSettings(statusMessage, fillFormButton);
+  
+  // 添加点击事件监听
   fillFormButton.addEventListener('click', async () => {
-    statusMessage.textContent = '正在分析页面表单...';
-
-    // 清理之前可能存在的标记
-    document.querySelectorAll('[data-autofill-id]').forEach(el => el.removeAttribute('data-autofill-id'));
-
-    // 查找表单字段
-    const fields = getVisibleFormFields();
-
-    if (fields.length === 0) {
-      statusMessage.textContent = '未在页面上找到可填充的表单字段。';
+    if (fillFormButton.disabled) {
+      statusMessage.textContent = '请先在选项页面设置API Key和简历内容';
       return;
     }
-
-    statusMessage.textContent = `找到 ${fields.length} 个表单字段，正在请求匹配...`;
-
-    // 从存储中获取解析后的简历数据
-    chrome.storage.local.get(['resumeData'], (result) => {
-      if (chrome.runtime.lastError) {
-        statusMessage.textContent = `读取简历数据失败: ${chrome.runtime.lastError.message}`;
-        console.error(chrome.runtime.lastError);
+    
+    try {
+      statusMessage.textContent = '正在收集表单字段...';
+      
+      // 收集页面上可见的表单字段
+      const fields = getVisibleFormFields();
+      if (!fields || fields.length === 0) {
+        statusMessage.textContent = '未在页面上找到表单字段';
         return;
       }
-
-      if (!result.resumeData) {
-        statusMessage.textContent = '未找到解析后的简历数据，请先上传并等待解析完成。';
-        return;
-      }
-
-      // 将表单字段和简历数据发送到 background script 请求 OpenAI 匹配
+      
+      statusMessage.textContent = `找到 ${fields.length} 个表单字段，正在请求AI匹配...`;
+      
+      // 将表单字段发送到background script请求匹配，现在无需传递resumeData
       chrome.runtime.sendMessage({
         type: 'MATCH_FIELDS_WITH_RESUME',
         payload: {
-          formFields: fields,
-          resumeData: result.resumeData
+          formFields: fields
         }
       }, (matchResponse) => {
         if (chrome.runtime.lastError) {
           statusMessage.textContent = `匹配请求失败: ${chrome.runtime.lastError.message}`;
           console.error(chrome.runtime.lastError);
-        } else if (matchResponse && matchResponse.success && matchResponse.payload) {
-          const fieldMapping = matchResponse.payload;
-          statusMessage.textContent = '匹配成功，正在填充表单...';
-
-          // 应用匹配结果填充表单
-          let filledCount = 0;
-          let failedCount = 0;
-
-          for (const fieldId in fieldMapping) {
-            if (Object.hasOwnProperty.call(fieldMapping, fieldId)) {
-              const value = fieldMapping[fieldId];
-              if (fillFormField(fieldId, value)) {
-                filledCount++;
-              } else {
-                failedCount++;
-              }
-            }
-          }
-
-          // 清理临时属性
-          document.querySelectorAll('[data-autofill-id]').forEach(el => el.removeAttribute('data-autofill-id'));
-
-          if (filledCount > 0) {
-            statusMessage.textContent = `已填充 ${filledCount} 个字段。${failedCount > 0 ? `有 ${failedCount} 个字段填充失败。`: ''}`;
-          } else {
-            statusMessage.textContent = '无法填充任何字段。';
-          }
-        } else {
+          return;
+        }
+        
+        if (!matchResponse || !matchResponse.success) {
           statusMessage.textContent = `匹配失败: ${matchResponse?.error || '未知错误'}`;
+          return;
+        }
+        
+        const fieldMapping = matchResponse.fieldMapping;
+        statusMessage.textContent = '正在填充表单...';
+        
+        // 使用匹配结果填充表单
+        let filledCount = 0;
+        for (const fieldId in fieldMapping) {
+          if (fillFormField(fieldId, fieldMapping[fieldId])) {
+            filledCount++;
+          }
+        }
+        
+        statusMessage.textContent = `表单填充完成！成功填充 ${filledCount} 个字段。`;
+      });
+    } catch (error) {
+      statusMessage.textContent = `处理出错: ${error.message}`;
+      console.error("Form filling error:", error);
+    }
+  });
+}
+
+// 检查API Key和简历数据是否已设置
+function checkResumeAndApiSettings(statusMessage, fillFormButton) {
+  chrome.storage.local.get(['openaiApiKey', 'resumeData'], (result) => {
+    const hasApiKey = !!result.openaiApiKey;
+    const hasResumeData = !!result.resumeData;
+    
+    if (!hasApiKey && !hasResumeData) {
+      statusMessage.textContent = '请先在选项页面设置API Key和简历内容';
+      fillFormButton.disabled = true;
+    } else if (!hasApiKey) {
+      statusMessage.textContent = '请先在选项页面设置API Key';
+      fillFormButton.disabled = true;
+    } else if (!hasResumeData) {
+      statusMessage.textContent = '请先在选项页面提供简历内容';
+      fillFormButton.disabled = true;
+    } else {
+      statusMessage.textContent = 'API Key和简历内容已设置，可以填充表单';
+      fillFormButton.disabled = false;
+    }
+  });
+}
+
+// 匹配表单字段和简历数据 - 移除resumeData参数
+function matchFieldsWithResume(formFields) {
+  return new Promise((resolve, reject) => {
+    try {
+      // 只将表单字段发送到后台，简历数据将由后台脚本从storage中获取
+      chrome.runtime.sendMessage({
+        type: 'MATCH_FIELDS_WITH_RESUME',
+        payload: { formFields }
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error("匹配请求失败:", chrome.runtime.lastError);
+          reject(chrome.runtime.lastError);
+        } else if (!response || !response.success) {
+          console.error("字段匹配失败:", response?.error);
+          reject(new Error(response?.error || "未知匹配错误"));
+        } else {
+          resolve(response.fieldMapping);
         }
       });
-    });
+    } catch (error) {
+      console.error("发送匹配请求时出错:", error);
+      reject(error);
+    }
   });
 }
 
@@ -1013,21 +992,6 @@ function setupBatchApplyFeature() {
       return;
     }
     
-    // 获取已上传的简历信息
-    const resumeInfoPromise = new Promise(resolve => {
-      chrome.storage.local.get(['lastUploadedResume'], result => {
-        resolve(result.lastUploadedResume || null);
-      });
-    });
-    
-    const resumeInfo = await resumeInfoPromise;
-    if (!resumeInfo || !resumeInfo.fileName) {
-      console.log("没有找到已上传的简历信息，无法自动填充文件上传字段");
-      return;
-    }
-    
-    console.log(`找到上传的简历信息: ${resumeInfo.fileName}`);
-    
     // 显示提示给用户
     const modalContainer = document.querySelector('.artdeco-modal__content, .jobs-easy-apply-content, [role="dialog"]');
     if (!modalContainer) return;
@@ -1051,8 +1015,7 @@ function setupBatchApplyFeature() {
     `;
     noticeDiv.innerHTML = `
       <p><strong>检测到简历上传字段</strong></p>
-      <p>需要上传您的简历文件: <b>${resumeInfo.fileName}</b></p>
-      <p>请点击"选择文件"按钮并选择您的简历</p>
+      <p>请手动上传您的简历文件。</p>
       <button id="dismiss-file-notice" style="background: #0073b1; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">我知道了</button>
     `;
     modalContainer.appendChild(noticeDiv);
@@ -2745,8 +2708,9 @@ function initialize() {
   window.resumeUploadNoticeDisplayed = false;
   window.currentResumeNoticeElement = null;
   
-  const { sidebar, statusMessage, resumeFileInput, fillFormButton, batchApplyButton, startWorkdayBatchButton, stopWorkdayBatchButton, workdayBatchStatusDiv, workdayApplyIntervalInput } = createAndInjectSidebar(); // Added Workday refs
-  setupFileUpload(resumeFileInput, statusMessage);
+  const { sidebar, statusMessage, fillFormButton, batchApplyButton, startWorkdayBatchButton, stopWorkdayBatchButton, workdayBatchStatusDiv, workdayApplyIntervalInput } = createAndInjectSidebar(); // Added Workday refs
+  
+  // 不再需要上传简历，直接设置表单填充功能
   setupFormFilling(fillFormButton, statusMessage);
   setupBatchApplyFeature(); // Sets up LinkedIn batch feature
   
@@ -3398,14 +3362,20 @@ function initialize() {
     console.log("开始处理 Workday 申请表单...");
     let isWorkdayFormBeingHandled = true; // 标记表单正在处理中
     let progressInterval = null;
+    // 将statusDiv的声明移到函数顶部，避免重复声明
+    const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
     
     try {
       // 先等待10秒，确保页面完全加载
       console.log("等待10秒让页面完全加载...");
       
       // 发送状态更新
-      const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
       if (statusDiv) statusDiv.textContent = "正在等待页面完全加载 (10秒)...";
+      
+      // 确保全局最后处理时间变量存在
+      if (typeof window.lastProcessingUpdate === 'undefined') {
+        window.lastProcessingUpdate = Date.now();
+      }
       
       // 等待10秒
       await new Promise(resolve => setTimeout(resolve, 10000));
@@ -3414,6 +3384,9 @@ function initialize() {
       // 设置一个定期发送进度更新的计时器
       const tabId = chrome.runtime.id; // 获取当前标签页ID
       progressInterval = setInterval(() => {
+        // 更新最后处理时间
+        window.lastProcessingUpdate = Date.now();
+        
         // 发送进度更新到后台
         chrome.runtime.sendMessage({
           type: 'SEND_PROCESSING_UPDATE',
@@ -3438,7 +3411,8 @@ function initialize() {
         return;
       }
       
-      // 更新进度消息
+      // 更新进度消息并更新最后处理时间
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
@@ -3446,11 +3420,12 @@ function initialize() {
       });
       
       // 等待加载器消失
-      await waitForWorkdayLoader(12000);
+      await waitForWorkdayLoader();
       console.log("Workday 页面加载完成，加载器已消失");
       
       // 1. 收集所有表单元素
       console.log("开始收集表单元素...");
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
@@ -3464,37 +3439,39 @@ function initialize() {
       }
       console.log(`已收集 ${formFields.length} 个表单元素`);
       
-      // 2. 提取简历数据
-      console.log("获取简历数据...");
+      // 2. 检查简历数据是否已设置
+      console.log("检查简历数据...");
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
-        details: '获取简历数据...'
+        details: '检查简历数据...'
       });
       
+      // 检查是否存在简历数据
       const resumeData = await getResumeDataFromStorage();
       if (!resumeData) {
-        console.log("未找到已解析的简历数据，无法自动填充");
+        console.log("未找到简历数据，无法自动填充");
         
         // 更新状态消息
-        const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
-        if (statusDiv) statusDiv.textContent = "未找到已上传的简历数据。请先上传简历。";
+        if (statusDiv) statusDiv.textContent = "未找到简历数据。请先在选项页面设置简历内容。";
         
         // 发送通知给后台脚本
         chrome.runtime.sendMessage({
           type: 'WORKDAY_PROCESS_COMPLETE',
           payload: {
             status: 'error',
-            details: '未找到已上传的简历数据'
+            details: '未找到简历数据'
           }
         });
         
         return;
       }
-      console.log("简历数据获取成功");
+      console.log("简历数据检查成功");
       
       // 3. 发送请求匹配字段和简历数据
       console.log("开始请求 AI 匹配字段和简历数据...");
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
@@ -3503,7 +3480,8 @@ function initialize() {
       
       let fieldMapping;
       try {
-        fieldMapping = await matchFieldsWithResume(formFields, resumeData);
+        // 不再传递resumeData参数
+        fieldMapping = await matchFieldsWithResume(formFields);
         if (!fieldMapping) {
           console.log("匹配请求未返回有效结果");
           throw new Error("AI 匹配未返回有效结果");
@@ -3519,6 +3497,7 @@ function initialize() {
       
       // 4. 填充表单字段
       console.log("开始填充 Workday 表单字段...");
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
@@ -3530,6 +3509,7 @@ function initialize() {
       
       // 5. 处理特殊字段（复选框、同意条款等）
       console.log("处理特殊字段...");
+      window.lastProcessingUpdate = Date.now();
       chrome.runtime.sendMessage({
         type: 'SEND_PROCESSING_UPDATE',
         tabId: tabId,
@@ -3560,8 +3540,7 @@ function initialize() {
     } catch (error) {
       console.error("处理 Workday 表单时出错:", error);
       
-      // 更新状态消息
-      const statusDiv = document.getElementById('workday-batch-status') || document.getElementById('status-message');
+      // 更新状态消息 - 使用外部声明的statusDiv变量
       if (statusDiv) {
         statusDiv.textContent = "处理 Workday 表单时出错: " + error.message;
       }
