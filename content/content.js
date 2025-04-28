@@ -873,6 +873,14 @@ function setupBatchApplyFeature() {
       return null;
   }
 
+  // **放弃按钮**
+  function findDiscardButton() {
+    const selectors = 'button[data-control-name="discard_application_confirm_btn"]';
+    const discardButtons = document.querySelectorAll(selectors);
+    for (const btn of discardButtons) { if (btn.offsetParent !== null) return btn; }
+    return null;
+}
+
   // **填充申请表单函数**
   async function fillApplicationModal() {
     console.log("[fillApplicationModal] Starting to fill application modal...");
@@ -2541,6 +2549,22 @@ function setupBatchApplyFeature() {
       try {
         if (!isBatchApplying) throw new Error("用户停止");
         console.log("点击左侧列表项...");
+
+        // 点击之前先看看有没有关闭的
+        // 如果找到了关闭按钮，也视为成功
+        const closeButton = findCloseButton();
+        if (closeButton) {
+          console.log("找到关闭按钮，认为申请已提交");
+          closeButton.click();
+
+          const discardButton = findDiscardButton();
+          if (discardButton) {
+            console.log("放弃");
+            await new Promise(resolve => setTimeout(resolve, 500));
+            discardButton.click();
+          }
+        }
+
         itemElement.click();
 
         await new Promise(resolve => setTimeout(resolve, 2000));
